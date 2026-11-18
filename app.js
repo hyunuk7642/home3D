@@ -1,5 +1,9 @@
-import * as THREE from 'three';
-import { OrbitControls } from './vendor/OrbitControls.js';
+// 모듈(import)을 쓰지 않는 일반 스크립트다. 그래야 index.html 을 더블클릭해서
+// (file:// 주소로) 열어도 동작한다. THREE 는 vendor/three.bundle.js 가 만든다.
+(() => {
+'use strict';
+const { OrbitControls } = window.THREE;
+const THREE = window.THREE;
 
 // ───────────────────────── 기본 설정 ─────────────────────────
 // 단위는 모두 미터. 물체의 y 는 "바닥에서 물체 밑면까지의 높이"다.
@@ -12,6 +16,9 @@ const TYPES = {
 const SWATCHES = ['#ffffff', '#ece7de', '#9aa5b1', '#3e4c59', '#c9a77c', '#8b5e3c',
                   '#d64545', '#f0b429', '#82b366', '#3ebd93', '#6c8ebf', '#8662c7'];
 const STORAGE_KEY = 'home3d-scene-v1';
+const TRACKPAD_KEY = 'home3d-trackpad';
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const MOD = IS_MAC ? '⌘' : 'Ctrl+';
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -19,6 +26,7 @@ const state = {
   selectedId: null,
   mode: 'select',     // 'select' | 'wall'
   snap: 0.1,
+  trackpad: IS_MAC,   // 두 손가락 쓸기로 화면을 돌리는 방식
 };
 let history = [];
 let future = [];
@@ -256,8 +264,10 @@ function refreshHint() {
     text = '위쪽 "추가"나 "벽 그리기"로 시작해 보세요. 한 칸은 1 m입니다.';
   } else if (selected()) {
     text = '선택한 물체를 끌면 옮겨집니다. 빈 곳을 끌면 화면이 돌아갑니다.';
+  } else if (state.trackpad) {
+    text = '두 손가락 쓸기: 화면 돌리기 · 두 손가락 벌리기/오므리기: 확대/축소 · Shift+쓸기: 화면 옮기기';
   } else {
-    text = '끌기: 화면 돌리기 · 휠: 확대/축소 · 오른쪽 버튼 끌기: 화면 옮기기';
+    text = '끌기: 화면 돌리기 · 휠: 확대/축소 · 오른쪽 버튼(또는 Shift) 끌기: 화면 옮기기';
   }
   $('hint').textContent = text;
 }
@@ -350,6 +360,55 @@ function setView(kind) {
   }
   controls.update();
 }
+
+// ───────────────────────── 트랙패드 ─────────────────────────
+// 맥북 트랙패드: 두 손가락 쓸기 = 돌리기, 벌리기/오므리기 = 확대/축소, Shift+쓸기 = 옮기기.
+// (마우스 휠을 쓰는 경우엔 "트랙패드" 체크를 끄면 휠이 확대/축소가 된다.)
+const orbit = new THREE.Spherical();
+const offset = new THREE.Vector3();
+
+function zoomBy(factor) {
+  offset.copy(camera.position).sub(controls.target);
+  const len = THREE.MathUtils.clamp(offset.length() * factor, controls.minDistance, controls.maxDistance);
+  camera.position.copy(controls.target).add(offset.setLength(len));
+}
+
+function orbitBy(dx, dy) {
+  offset.copy(camera.position).sub(controls.target);
+  orbit.setFromVector3(offset);
+  orbit.theta += dx * 0.005;
+  orbit.phi = THREE.MathUtils.clamp(orbit.phi + dy * 0.005, 0.01, controls.maxPolarAngle);
+  camera.position.copy(controls.target).add(offset.setFromSpherical(orbit));
+  camera.lookAt(controls.target);
+}
+
+function panBy(dx, dy) {
+  const scale = camera.position.distanceTo(controls.target) * 0.0015;
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).setY(0).normalize();
+  const back = new THREE.Vector3(-right.z, 0, right.x); // 화면 아래쪽(내 쪽) 방향
+  const move = right.multiplyScalar(dx * scale).add(back.multiplyScalar(dy * scale));
+  camera.position.add(move);
+  controls.target.add(move);
+}
+
+canvas.addEventListener('wheel', (e) => {
+  if (!state.trackpad) return; // 마우스 방식: OrbitControls 가 휠로 확대/축소
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.ctrlKey || e.metaKey) zoomBy(Math.exp(e.deltaY * 0.01)); // 크롬·파이어폭스의 손가락 벌리기
+  else if (e.shiftKey) panBy(e.deltaX, e.deltaY);
+  else orbitBy(e.deltaX, e.deltaY);
+}, { capture: true, passive: false });
+
+// 사파리는 손가락 벌리기를 gesture 이벤트로 알려 준다.
+let gestureScale = 1;
+canvas.addEventListener('gesturestart', (e) => { e.preventDefault(); gestureScale = e.scale; });
+canvas.addEventListener('gesturechange', (e) => {
+  e.preventDefault();
+  zoomBy(gestureScale / e.scale);
+  gestureScale = e.scale;
+});
+canvas.addEventListener('gestureend', (e) => e.preventDefault());
 
 function resize() {
   const { clientWidth: w, clientHeight: h } = view;
@@ -544,6 +603,11 @@ document.querySelectorAll('[data-add]').forEach((btn) => {
 $('view-3d').addEventListener('click', () => setView('3d'));
 $('view-top').addEventListener('click', () => setView('top'));
 $('snap').addEventListener('change', (e) => { state.snap = parseFloat(e.target.value) || 0; });
+$('trackpad').addEventListener('change', (e) => {
+  state.trackpad = e.target.checked;
+  try { localStorage.setItem(TRACKPAD_KEY, state.trackpad ? '1' : '0'); } catch { /* 무시 */ }
+  refreshHint();
+});
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
 $('sample').addEventListener('click', () => {
@@ -619,9 +683,21 @@ window.addEventListener('keydown', (e) => {
 
 // ───────────────────────── 시작 ─────────────────────────
 try {
+  const pad = localStorage.getItem(TRACKPAD_KEY);
+  if (pad !== null) state.trackpad = pad === '1';
+} catch { /* 무시 */ }
+$('trackpad').checked = state.trackpad;
+
+try {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) state.objects = sanitize(JSON.parse(saved));
 } catch { /* 저장된 내용이 깨졌으면 빈 공간으로 시작 */ }
+
+// 단축키 안내는 맥에서는 ⌘, 그 밖에는 Ctrl 로 보여 준다.
+$('undo').title = `되돌리기 (${MOD}Z)`;
+$('redo').title = `다시 실행 (${IS_MAC ? '⇧⌘Z' : 'Ctrl+Y'})`;
+$('dup').title = `복제 (${MOD}D)`;
+$('del').title = `삭제 (${IS_MAC ? '⌫' : 'Delete'})`;
 
 syncScene();
 resize();
@@ -641,4 +717,5 @@ renderer.setAnimationLoop(() => {
 });
 
 // 자동 점검(테스트)에서 장면을 들여다볼 수 있게 열어 둔다.
-window.__home3d = { state, camera, meshes };
+window.__home3d = { state, camera, meshes, controls };
+})();

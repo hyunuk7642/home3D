@@ -55,12 +55,14 @@ select, input[type=text], input[type=number] {
 }
 .brand { font-size: 16px; margin-right: 4px; }
 .group { display: flex; align-items: center; gap: 4px; }
+.check { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .label { color: var(--muted); font-size: 12px; margin-right: 2px; }
 
 main { flex: 1; display: flex; min-height: 0; }
 
 #view { position: relative; flex: 1; min-width: 0; }
 #canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#view { overscroll-behavior: none; }
 #view.drawing #canvas { cursor: crosshair; }
 
 #hint {

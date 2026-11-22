@@ -589,8 +589,9 @@ function sampleRoom() {
 }
 
 // 전시 공간: 10 × 8 m 지하 방으로 가정(일반 교실 9 × 7.5 m 보다 조금 큼). 입구 쪽(앞쪽) 벽은 유리라
-// 전시에 쓰지 않는다. 뒤쪽 벽을 따라 전시 칸 5개 × 포스터 4장 = 연구회 20곳, 가운데에 상자 트리 2그루,
-// 입구 쪽에 이동식 화면 3대, 안쪽(오른쪽)에 이야기 나누는 자리.
+// 전시에 쓰지 않는다. 연구회 20곳은 벽면 한 구획에 하나씩: 왼쪽 벽 4 + 뒤쪽 벽 5 + 오른쪽 벽 3 +
+// 가운데 긴 가벽 앞뒤 4씩. 번호는 입구에서 들어와 도는 순서. 가벽 앞쪽에 상자 트리 2그루,
+// 유리벽 앞에 이동식 화면 3대, 안쪽(오른쪽)에 이야기 나누는 자리.
 // 방 크기가 정해지면 아래 W(가로), D(세로)만 바꾸면 나머지가 따라서 배치된다.
 function gallerySpace() {
   const W = 10, D = 8, H = 2.6, T = 0.15, F = 0.05; // 가로, 세로, 천장 높이, 벽 두께, 바닥 두께
@@ -608,26 +609,21 @@ function gallerySpace() {
   add('door', '입구', { w: 1.2, x: doorX, z: D / 2, color: GLASS, opacity: 0.5 });
   add('floor', '입구 레드카펫', { w: 1.4, d: 2.6, h: 0.01, x: doorX, z: D / 2 - 1.4, y: F, color: '#a8322d' });
 
-  // 전시 칸 5개: 칸막이 4개가 뒤쪽 벽에서 2.5 m 나온다.
-  const BAYS = 5, bayW = W / BAYS, bayD = 2.5;
-  const inner = -D / 2 + T / 2;            // 뒤쪽 벽 안쪽 면
-  const bayZ = round(inner + bayD / 2);
-  for (let i = 1; i < BAYS; i++) {
-    add('wall', `칸막이 ${i}`, { w: bayD, d: 0.1, h: 2.2, x: round(-W / 2 + bayW * i), z: bayZ, rot: 90, color: WHITE });
-  }
-  // 포스터 자리(세로 A1: 0.6 × 0.84 m). 칸마다 왼쪽 1 + 뒤쪽 2 + 오른쪽 1 = 4장, 모두 20장.
-  const poster = { w: 0.6, h: 0.84, d: 0.02, y: 1.0, color: '#fff8e7' };
+  // 가운데 가벽: 양 끝에 지나다닐 틈을 1.4 m 씩 두고, 뒤쪽 벽과의 사이는 3.2 m 통로.
+  const midLen = W - 2.8, midT = 0.12, midZ = round(-D / 2 + 3.2);
+  add('wall', '가운데 가벽', { w: midLen, d: midT, h: 2.2, z: midZ, color: WHITE });
+
+  // 연구회 구획: 벽면 한 구획(폭 약 2 m)에 연구회 하나. 구획마다 전시판(1.6 × 1.2 m) 자리를 둔다.
+  const panel = { w: 1.6, h: 1.2, d: 0.02, y: 0.9, color: '#fff8e7' };
+  const off = T / 2 + 0.011, midOff = midT / 2 + 0.011; // 벽면에서 살짝 띄우는 거리
   let n = 1;
-  const spot = (props) => add('box', `연구회 ${n++} 포스터`, { ...poster, ...props });
-  for (let i = 0; i < BAYS; i++) {
-    const left = -W / 2 + bayW * i, right = left + bayW, mid = (left + right) / 2;
-    const leftFace = left + (i === 0 ? T / 2 : 0.05), rightFace = right - (i === BAYS - 1 ? T / 2 : 0.05);
-    const gap = Math.min(0.45, bayW / 4);
-    spot({ x: round(leftFace + 0.011), z: bayZ, rot: 90 });
-    spot({ x: round(mid - gap), z: round(inner + 0.011) });
-    spot({ x: round(mid + gap), z: round(inner + 0.011) });
-    spot({ x: round(rightFace - 0.011), z: bayZ, rot: 90 });
-  }
+  const spot = (x, z, rot = 0) => add('box', `연구회 ${n++}`, { ...panel, x: round(x), z: round(z), rot });
+  const sideStep = D / 4, backStep = W / 5, midStep = midLen / 4;
+  for (let i = 0; i < 4; i++) spot(-W / 2 + off, D / 2 - sideStep * (i + 0.5), 90);          // 왼쪽 벽: 입구 쪽 → 안쪽
+  for (let i = 0; i < 5; i++) spot(-W / 2 + backStep * (i + 0.5), -D / 2 + off);             // 뒤쪽 벽: 왼쪽 → 오른쪽
+  for (let i = 0; i < 3; i++) spot(W / 2 - off, -D / 2 + sideStep * (i + 0.5), 90);          // 오른쪽 벽: 안쪽 → 앞쪽
+  for (let i = 0; i < 4; i++) spot(midLen / 2 - midStep * (i + 0.5), midZ - midOff);         // 가벽 뒷면: 오른쪽 → 왼쪽
+  for (let i = 0; i < 4; i++) spot(-midLen / 2 + midStep * (i + 0.5), midZ + midOff);        // 가벽 앞면: 왼쪽 → 오른쪽
 
   // 상자 트리: 정육면체 4개를 점점 작게 쌓는다. 옆면 4 × 4단 = 16면에 포스터를 붙일 수 있다.
   const tree = (name, x, z) => {
@@ -641,8 +637,8 @@ function gallerySpace() {
     add('box', `${name} 선물 1`, { w: 0.3, h: 0.25, d: 0.3, x: round(x - 0.75), z: round(z + 0.45), y: F, rot: 20, color: '#d64545' });
     add('box', `${name} 선물 2`, { w: 0.25, h: 0.2, d: 0.35, x: round(x + 0.7), z: round(z + 0.55), y: F, rot: -15, color: '#f0b429' });
   };
-  const treeZ = round(inner + bayD + (D - bayD) * 0.3);
-  tree('트리 1', round(-W * 0.24), treeZ);
+  const treeZ = round(midZ + 2.1);
+  tree('트리 1', round(-W * 0.2), treeZ);
   tree('트리 2', round(W * 0.04), treeZ);
 
   // 입구 옆 유리벽 앞에 이동식 화면 3대(받침 + 기둥 + 화면), 방 안쪽을 바라본다.
@@ -663,8 +659,9 @@ function gallerySpace() {
     }
   }
   const cx = round(W / 2 - T / 2 - 0.3);
-  add('box', '커피 수납장', { w: 1.4, d: 0.55, h: 0.9, x: cx, z: tz, y: F, rot: 90, color: WHITE, group: '커피 코너' });
-  add('box', '커피 머신', { w: 0.4, d: 0.3, h: 0.42, x: cx, z: round(tz - 0.3), y: F + 0.9, rot: 90, color: DARK, group: '커피 코너' });
+  const cz = round(D / 2 - 1.1); // 오른쪽 벽의 연구회 구획이 끝난 뒤, 유리벽 쪽 구석
+  add('box', '커피 수납장', { w: 1.4, d: 0.55, h: 0.9, x: cx, z: cz, y: F, rot: 90, color: WHITE, group: '커피 코너' });
+  add('box', '커피 머신', { w: 0.4, d: 0.3, h: 0.42, x: cx, z: round(cz - 0.3), y: F + 0.9, rot: 90, color: DARK, group: '커피 코너' });
 
   state.selectedId = null;
   syncScene();

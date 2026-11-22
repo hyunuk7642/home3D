@@ -354,6 +354,7 @@ function sanitize(list) {
       rot: num(r.rot, 0),
       color: /^#[0-9a-f]{6}$/i.test(r.color) ? r.color : t.color,
       opacity: Math.min(1, num(r.opacity, 1, 0.1)),
+      ...(typeof r.group === 'string' && r.group ? { group: r.group.slice(0, 40) } : {}),
     };
   });
 }
@@ -407,6 +408,8 @@ function refreshForm() {
   $('form').hidden = !o;
   $('no-sel').hidden = !!o;
   if (!o) return;
+  $('group-row').hidden = !o.group;
+  if (o.group) $('group-label').textContent = `"${o.group}" 묶음 · 함께 움직입니다`;
   for (const [key, el] of Object.entries(fields)) {
     if (document.activeElement === el) continue; // 입력 중인 칸은 건드리지 않는다
     el.value = o[key];
@@ -447,6 +450,8 @@ function refreshHint() {
     text = '위쪽 "추가"나 "벽 그리기"로 시작해 보세요. 한 칸은 1 m입니다.';
   } else if (selected() && isOpening(selected())) {
     text = '문·창문을 끌어 벽 가까이 가져가면 벽에 붙고, 그 자리의 벽이 뚫립니다.';
+  } else if (selected() && selected().group) {
+    text = '묶음은 끌면 함께 움직입니다. 조각을 따로 다루려면 오른쪽에서 "묶음 풀기"를 누르세요.';
   } else if (selected()) {
     text = '선택한 물체를 끌면 옮겨집니다. 빈 곳을 끌면 화면이 돌아갑니다.';
   } else if (state.trackpad) {
@@ -483,11 +488,31 @@ function setMode(mode) {
 }
 
 // ───────────────────────── 편집 동작 ─────────────────────────
+// 묶음: group 값이 같은 물체들. 끌기·방향키·복제·삭제가 묶음 전체에 적용된다.
+const groupOf = (o) => (o.group ? state.objects.filter((p) => p.group === o.group) : [o]);
+
+function newGroupName(group) {
+  const base = group.replace(/\s*\d+$/, '');
+  const used = new Set(state.objects.map((o) => o.group));
+  for (let n = 2; ; n++) if (!used.has(`${base} ${n}`)) return `${base} ${n}`;
+}
+
+// 물체를 (dx, dz) 만큼 옮기고, 같은 묶음의 나머지도 똑같이 옮긴다.
+function moveWithGroup(o, dx, dz) {
+  for (const p of groupOf(o)) {
+    if (p !== o) edit(p, () => { p.x = round(p.x + dx); p.z = round(p.z + dz); });
+  }
+}
+
 function removeSelected() {
   const o = selected();
   if (!o) return;
   // 벽을 지우면 그 벽에 달린 문·창문도 함께 지운다.
-  const gone = new Set([o.id, ...(o.type === 'wall' ? openingsIn(o).map((r) => r.o.id) : [])]);
+  const gone = new Set();
+  for (const p of groupOf(o)) {
+    gone.add(p.id);
+    if (p.type === 'wall') openingsIn(p).forEach((r) => gone.add(r.o.id));
+  }
   state.objects = state.objects.filter((p) => !gone.has(p.id));
   syncScene();
   commit();
@@ -497,12 +522,29 @@ function duplicateSelected() {
   const o = selected();
   if (!o) return;
   const shift = (state.snap || 0.5) * 5;
-  const clone = (p) => addObject(p.type, { ...p, id: newId(), name: nextName(p.type), x: round(p.x + shift), z: round(p.z + shift) });
-  const hosted = o.type === 'wall' ? openingsIn(o).map((r) => r.o) : [];
-  const copy = clone(o);
-  hosted.forEach(clone);
+  const group = o.group && newGroupName(o.group);
+  const originals = new Set();
+  for (const p of groupOf(o)) {
+    originals.add(p);
+    if (p.type === 'wall') openingsIn(p).forEach((r) => originals.add(r.o));
+  }
+  let copyOfSelected = null;
+  for (const p of originals) {
+    const copy = addObject(p.type, {
+      ...p, id: newId(), name: nextName(p.type), x: round(p.x + shift), z: round(p.z + shift),
+      ...(p.group ? { group } : {}),
+    });
+    if (p === o) copyOfSelected = copy;
+  }
   syncScene();
-  state.selectedId = copy.id;
+  state.selectedId = copyOfSelected.id;
+  commit();
+}
+
+function ungroupSelected() {
+  const o = selected();
+  if (!o || !o.group) return;
+  for (const p of groupOf(o)) delete p.group;
   commit();
 }
 
@@ -540,6 +582,84 @@ function sampleRoom() {
   addObject('window', { name: '큰 창문', w: 2, x: 0.6, z: -D / 2 });
   addObject('window', { name: '작은 창문', x: -W / 2, z: 1, rot: 90 });
   addObject('cylinder', { name: '탁자', w: 1, d: 1, h: 0.45, x: 0.5, z: 1.5, y: 0.05, color: '#f0b429' });
+  state.selectedId = null;
+  syncScene();
+  commit();
+  setView('3d');
+}
+
+// 전시 공간: 12 × 9 m 지하 방(일반 교실 9 × 7.5 m 보다 조금 큰 크기로 가정).
+// 뒤쪽 벽을 따라 전시 칸 5개, 가운데에 상자 트리 2그루, 입구 쪽에 이동식 화면 3대,
+// 안쪽(오른쪽)에 이야기 나누는 자리. 수치는 모두 여기서 바꿀 수 있다.
+function gallerySpace() {
+  const W = 12, D = 9, H = 2.6, T = 0.15, F = 0.05; // 가로, 세로, 천장 높이, 벽 두께, 바닥 두께
+  const WHITE = '#f5f2ea', WOOD = '#a9825a', DARK = '#2b2f36';
+  state.objects = [];
+  const add = (type, name, props) => addObject(type, { name, ...props });
+
+  add('floor', '바닥', { w: W, d: D, color: '#cfcac2' });
+  add('wall', '뒤쪽 벽', { w: W + T, z: -D / 2, h: H, color: WHITE });
+  add('wall', '왼쪽 벽', { w: D + T, x: -W / 2, rot: 90, h: H, color: WHITE });
+  // 안이 들여다보이도록 앞쪽·오른쪽 벽은 반투명
+  add('wall', '오른쪽 벽', { w: D + T, x: W / 2, rot: 90, h: H, color: WHITE, opacity: 0.25 });
+  add('wall', '앞쪽 벽', { w: W + T, z: D / 2, h: H, color: WHITE, opacity: 0.25 });
+  add('door', '입구', { w: 1.2, x: -4.8, z: D / 2 });
+  add('floor', '입구 레드카펫', { w: 1.4, d: 3, h: 0.01, x: -4.8, z: D / 2 - 1.6, y: F, color: '#a8322d' });
+
+  // 전시 칸 5개: 칸막이 4개가 뒤쪽 벽에서 2.5 m 나온다. 한 칸 폭 2.4 m.
+  const BAYS = 5, bayW = W / BAYS, bayD = 2.5;
+  const inner = -D / 2 + T / 2;            // 뒤쪽 벽 안쪽 면
+  const bayZ = inner + bayD / 2;
+  for (let i = 1; i < BAYS; i++) {
+    add('wall', `칸막이 ${i}`, { w: bayD, d: 0.1, h: 2.2, x: -W / 2 + bayW * i, z: bayZ, rot: 90, color: WHITE });
+  }
+  // 포스터 자리(세로 A1: 0.6 × 0.84 m). 칸마다 뒤쪽 1장 + 양옆 1장씩 = 15장.
+  const poster = { w: 0.6, h: 0.84, d: 0.02, y: 1.0, color: '#fff8e7' };
+  let n = 1;
+  for (let i = 0; i < BAYS; i++) {
+    const left = -W / 2 + bayW * i, right = left + bayW;
+    const leftFace = left + (i === 0 ? T / 2 : 0.05), rightFace = right - (i === BAYS - 1 ? T / 2 : 0.05);
+    add('box', `포스터 자리 ${n++}`, { ...poster, x: round(leftFace + 0.011), z: bayZ, rot: 90 });
+    add('box', `포스터 자리 ${n++}`, { ...poster, x: round((left + right) / 2), z: round(inner + 0.011) });
+    add('box', `포스터 자리 ${n++}`, { ...poster, x: round(rightFace - 0.011), z: bayZ, rot: 90 });
+  }
+
+  // 상자 트리: 정육면체 4개를 점점 작게 쌓는다. 옆면 4 × 4단 = 16면에 포스터를 붙일 수 있다.
+  const tree = (name, x, z) => {
+    const sizes = [0.8, 0.65, 0.5, 0.35], greens = ['#1f6b3a', '#2a7d46', '#34904f', '#3fa35a'];
+    let y = F;
+    sizes.forEach((size, i) => {
+      add('box', `${name} ${i + 1}단`, { w: size, h: size, d: size, x, z, y: round(y), rot: i % 2 ? 45 : 0, color: greens[i], group: name });
+      y += size;
+    });
+    add('box', `${name} 별`, { w: 0.16, h: 0.16, d: 0.16, x, z, y: round(y), rot: 45, color: '#f0b429', group: name });
+    add('box', `${name} 선물 1`, { w: 0.3, h: 0.25, d: 0.3, x: x - 0.75, z: z + 0.45, y: F, rot: 20, color: '#d64545' });
+    add('box', `${name} 선물 2`, { w: 0.25, h: 0.2, d: 0.35, x: x + 0.7, z: z + 0.55, y: F, rot: -15, color: '#f0b429' });
+  };
+  tree('트리 1', -2.4, 0.3);
+  tree('트리 2', 0.6, 0.3);
+
+  // 입구 쪽 이동식 화면 3대(받침 + 기둥 + 화면), 방 안쪽을 바라본다.
+  [-2.9, -1.7, -0.5].forEach((x, i) => {
+    const group = `이동식 화면 ${i + 1}`, z = D / 2 - 0.9;
+    add('cylinder', `${group} 받침`, { w: 0.42, d: 0.42, h: 0.03, x, z, y: F, color: '#e8e4dc', group });
+    add('cylinder', `${group} 기둥`, { w: 0.04, d: 0.04, h: 1.05, x, z: z + 0.03, y: F + 0.03, color: '#e8e4dc', group });
+    add('box', `${group} 화면`, { w: 0.62, h: 0.37, d: 0.03, x, z, y: 0.95, color: DARK, group });
+  });
+
+  // 안쪽 이야기 자리: 탁자 + 의자 6개, 벽 쪽에 커피 머신 놓는 수납장
+  const tx = 3.6, tz = 2.6;
+  add('box', '탁자', { w: 1.8, d: 0.9, h: 0.72, x: tx, z: tz, y: F, color: WOOD, group: '이야기 자리' });
+  let chair = 1;
+  for (const dz of [-0.8, 0.8]) {
+    for (const dx of [-0.6, 0, 0.6]) {
+      add('cylinder', `의자 ${chair++}`, { w: 0.38, d: 0.38, h: 0.45, x: round(tx + dx), z: round(tz + dz), y: F, color: '#a8322d', group: '이야기 자리' });
+    }
+  }
+  const cx = round(W / 2 - T / 2 - 0.3);
+  add('box', '커피 수납장', { w: 1.4, d: 0.55, h: 0.9, x: cx, z: tz, y: F, rot: 90, color: WHITE, group: '커피 코너' });
+  add('box', '커피 머신', { w: 0.4, d: 0.3, h: 0.42, x: cx, z: tz - 0.3, y: F + 0.9, rot: 90, color: DARK, group: '커피 코너' });
+
   state.selectedId = null;
   syncScene();
   commit();
@@ -725,10 +845,12 @@ canvas.addEventListener('pointermove', (e) => {
   const p = pointOnLevel(e, press.drag.level);
   if (!p) return;
   const x = p.x + press.drag.offsetX, z = p.z + press.drag.offsetZ;
+  const fromX = o.x, fromZ = o.z;
   edit(o, () => {
     if (isOpening(o)) snapToWall(o, x, z);
     else { o.x = snap(x); o.z = snap(z); }
   });
+  moveWithGroup(o, o.x - fromX, o.z - fromZ);
   refreshForm();
 });
 
@@ -812,6 +934,7 @@ $('rot90').addEventListener('click', () => {
 });
 $('dup').addEventListener('click', duplicateSelected);
 $('del').addEventListener('click', removeSelected);
+$('ungroup').addEventListener('click', ungroupSelected);
 
 // ───────────────────────── 위쪽 도구 모음 ─────────────────────────
 $('tool-select').addEventListener('click', () => setMode('select'));
@@ -843,10 +966,14 @@ $('trackpad').addEventListener('change', (e) => {
 });
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
-$('sample').addEventListener('click', () => {
-  if (state.objects.length && !confirm('지금 공간을 지우고 예시 방으로 바꿀까요? (되돌리기로 복구할 수 있습니다)')) return;
-  sampleRoom();
-});
+const PRESETS = { sample: sampleRoom, gallery: gallerySpace };
+for (const [id, build] of Object.entries(PRESETS)) {
+  $(id).addEventListener('click', () => {
+    const label = $(id).textContent;
+    if (state.objects.length && !confirm(`지금 공간을 지우고 "${label}"(으)로 바꿀까요? (되돌리기로 복구할 수 있습니다)`)) return;
+    build();
+  });
+}
 $('clear').addEventListener('click', () => {
   if (!state.objects.length) return;
   if (!confirm('모든 물체를 지울까요? (되돌리기로 복구할 수 있습니다)')) return;
@@ -911,6 +1038,7 @@ window.addEventListener('keydown', (e) => {
       o.x = round(o.x + move[0] * step);
       o.z = round(o.z + move[1] * step);
     });
+    moveWithGroup(o, move[0] * step, move[1] * step);
     commit();
   }
 });

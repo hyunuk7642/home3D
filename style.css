@@ -126,3 +126,6 @@ p.muted { margin: 0; }
   #panel { width: 100%; max-height: 42%; border-left: 0; border-top: 1px solid var(--line); }
   .brand { width: 100%; }
 }
+
+#group-row { margin: 12px 0 0; justify-content: space-between; font-size: 12px; }
+#group-row[hidden] { display: none; }

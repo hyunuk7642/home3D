@@ -129,3 +129,24 @@ p.muted { margin: 0; }
 
 #group-row { margin: 12px 0 0; justify-content: space-between; font-size: 12px; }
 #group-row[hidden] { display: none; }
+
+#view.walking #canvas { cursor: grab; }
+#walk-pad {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  gap: 4px;
+}
+#walk-pad[hidden] { display: none; }
+#walk-pad button {
+  height: 44px;
+  padding: 0;
+  font-size: 16px;
+  background: rgba(255, 255, 255, .85);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+@media (max-width: 760px) { #hint { max-width: calc(100% - 170px); } }

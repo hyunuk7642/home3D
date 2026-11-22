@@ -15,6 +15,7 @@ const TYPES = {
   // 문·창문은 벽에 겹쳐 놓으면 그 자리의 벽이 뚫린다.
   door:     { label: '문',     w: 0.9, h: 2.1,  d: 0.16, color: '#8b5e3c' },
   window:   { label: '창문',   w: 1.2, h: 1.1,  d: 0.16, color: '#ffffff', y: 0.9 },
+  person:   { label: '사람',   w: 0.45, h: 1.7, d: 0.3,  color: '#2563eb' },
 };
 const isOpening = (o) => o.type === 'door' || o.type === 'window';
 const SWATCHES = ['#ffffff', '#ece7de', '#9aa5b1', '#3e4c59', '#c9a77c', '#8b5e3c',
@@ -70,7 +71,9 @@ const grid = new THREE.GridHelper(60, 60, '#8a94a0', '#c3cad3'); // 한 칸 = 1 
 grid.position.y = 0.001;
 scene.add(grid);
 
+// 사람: 놓아 두고 "걸어 보기"를 누르면 이 사람의 눈높이에서 공간을 돌아본다. rot 은 바라보는 방향.
 const GEOMETRY = {
+  sphere: new THREE.SphereGeometry(0.5, 24, 16),
   box: new THREE.BoxGeometry(1, 1, 1),
   cylinder: new THREE.CylinderGeometry(0.5, 0.5, 1, 40),
 };
@@ -126,6 +129,18 @@ function createNode(o) {
     grip.visible = false;
     grip.userData.grip = true;
     node.add(grip);
+  } else if (o.type === 'person') {
+    // 몸통 + 머리 + 바라보는 쪽을 알려 주는 코, 그리고 집기 쉬운 손잡이 상자
+    node = new THREE.Group();
+    for (const geo of [GEOMETRY.cylinder, GEOMETRY.sphere, GEOMETRY.box]) {
+      const part = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.8 }));
+      part.castShadow = part.receiveShadow = true;
+      node.add(part);
+    }
+    const grip = new THREE.Mesh(GEOMETRY.box, new THREE.MeshBasicMaterial());
+    grip.visible = false;
+    grip.userData.grip = true;
+    node.add(grip);
   } else {
     node = new THREE.Mesh(geometryFor(o.type), new THREE.MeshStandardMaterial({ roughness: 0.85 }));
     node.castShadow = node.receiveShadow = true;
@@ -172,6 +187,13 @@ function applyNode(o) {
   if (isOpening(o)) {
     (o.type === 'door' ? applyDoor : applyWindow)(node, o);
     node.children[node.children.length - 1].scale.set(o.w, o.h, o.d);
+  } else if (o.type === 'person') {
+    const [body, head, nose, grip] = node.children;
+    const headSize = Math.min(o.h * 0.14, 0.3), bodyH = o.h - headSize * 1.05;
+    setPart(body, 0, -o.h / 2 + bodyH / 2, 0, o.w, bodyH, o.d, o.color, o.opacity);
+    setPart(head, 0, o.h / 2 - headSize / 2, 0, headSize, headSize, headSize, '#f1c9a5', o.opacity);
+    setPart(nose, 0, o.h / 2 - headSize / 2, -headSize / 2, headSize * 0.25, headSize * 0.25, headSize * 0.5, '#3e4c59', o.opacity); // 앞 = -z
+    grip.scale.set(o.w, o.h, o.d);
   } else {
     if (o.type !== 'wall') node.scale.set(o.w, o.h, o.d);
     const base = node.userData.base || (node.userData.base = node.material);
@@ -491,6 +513,8 @@ function refreshHint() {
   let text;
   if (noticeText) {
     text = noticeText;
+  } else if (state.mode === 'walk') {
+    text = 'W A S D 또는 방향키: 걷기·돌기 · 끌기: 둘러보기 · 두 손가락 쓸기: 걷기·돌기 · Esc: 끝내기';
   } else if (state.mode === 'wall') {
     text = wallStart
       ? '벽이 끝날 곳을 누르세요. 이어서 계속 그릴 수 있고, Esc로 끝냅니다.'
@@ -520,6 +544,10 @@ function refreshUI() {
   $('tool-select').classList.toggle('on', state.mode === 'select');
   $('tool-wall').classList.toggle('on', state.mode === 'wall');
   view.classList.toggle('drawing', state.mode === 'wall');
+  $('walk').classList.toggle('on', state.mode === 'walk');
+  $('walk').textContent = state.mode === 'walk' ? '걷기 끝내기' : '걸어 보기';
+  $('walk-pad').hidden = state.mode !== 'walk';
+  view.classList.toggle('walking', state.mode === 'walk');
 }
 
 function select(id) {
@@ -528,6 +556,7 @@ function select(id) {
 }
 
 function setMode(mode) {
+  if (state.mode === 'walk' && mode !== 'walk') leaveWalk();
   state.mode = mode;
   wallStart = null;
   preview.visible = false;
@@ -817,6 +846,14 @@ function panBy(dx, dy) {
 }
 
 canvas.addEventListener('wheel', (e) => {
+  if (state.mode === 'walk') { // 두 손가락 쓸기: 위아래 = 앞뒤로 걷기, 좌우 = 돌기
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.ctrlKey || e.metaKey) return;
+    walkBy(e.deltaY * 0.004, 0);
+    lookBy(e.deltaX * 0.003, 0);
+    return;
+  }
   if (!state.trackpad) return; // 마우스 방식: OrbitControls 가 휠로 확대/축소
   e.preventDefault();
   e.stopPropagation();
@@ -834,6 +871,133 @@ canvas.addEventListener('gesturechange', (e) => {
   gestureScale = e.scale;
 });
 canvas.addEventListener('gestureend', (e) => e.preventDefault());
+
+// ───────────────────────── 걸어 보기 ─────────────────────────
+// 사람의 눈높이에서 공간을 돌아본다. 벽과 가구는 통과하지 못하고, 문 자리로는 지나갈 수 있다.
+const WALK_KEYS = {
+  w: 'forward', arrowup: 'forward', s: 'back', arrowdown: 'back',
+  a: 'left', d: 'right', arrowleft: 'turnLeft', arrowright: 'turnRight', q: 'turnLeft', e: 'turnRight',
+};
+const BODY = 0.22;          // 사람 몸의 반지름(m)
+const held = new Set();     // 지금 누르고 있는 이동 키
+const walk = { id: null, x: 0, z: 0, yaw: 0, pitch: 0, saved: null };
+
+const walker = () => state.objects.find((o) => o.id === walk.id) || null;
+
+// (x, z)에 사람이 설 수 있는가
+function canStand(x, z, me) {
+  for (const o of state.objects) {
+    if (o === me || o.type === 'floor' || o.type === 'person' || isOpening(o)) continue;
+    if (o.y + o.h < me.y + 0.3 || o.y > me.y + me.h) continue; // 넘어갈 만큼 낮거나 머리 위에 있는 것
+    const { lx, lz } = wallLocal(o, x, z);
+    if (Math.abs(lx) >= o.w / 2 + BODY || Math.abs(lz) >= o.d / 2 + BODY) continue;
+    const throughDoor = o.type === 'wall' && openingsIn(o).some((r) =>
+      r.o.type === 'door' && r.o.y - me.y < 0.3 && Math.abs(lx - r.lx) < r.o.w / 2 - BODY * 0.6);
+    if (!throughDoor) return false;
+  }
+  return true;
+}
+
+// 앞으로 forward, 오른쪽으로 side 만큼(m). 막히면 벽을 따라 미끄러진다.
+function walkBy(forward, side) {
+  const me = walker();
+  if (!me) return;
+  const sin = Math.sin(walk.yaw), cos = Math.cos(walk.yaw);
+  // 한 번에 크게 움직이면 얇은 벽을 건너뛸 수 있으니 10 cm 이하로 나눠 걷는다.
+  const steps = Math.max(1, Math.ceil(Math.hypot(forward, side) / 0.1));
+  const dx = (-sin * forward + cos * side) / steps, dz = (-cos * forward - sin * side) / steps;
+  const stuck = !canStand(walk.x, walk.z, me); // 처음부터 물체 안에 있으면 빠져나올 수 있게 한다
+  for (let i = 0; i < steps; i++) {
+    if (stuck || canStand(walk.x + dx, walk.z, me)) walk.x += dx;
+    if (stuck || canStand(walk.x, walk.z + dz, me)) walk.z += dz;
+  }
+}
+
+function lookBy(dYaw, dPitch) {
+  walk.yaw -= dYaw;
+  walk.pitch = THREE.MathUtils.clamp(walk.pitch - dPitch, -1.3, 1.3);
+}
+
+function stepWalk(dt) {
+  const me = walker();
+  if (!me) { setMode('select'); return; } // 걷던 사람이 지워졌다
+  const speed = (held.has('fast') ? 3 : 1.4) * dt; // 보통 걸음 1.4 m/s
+  const f = (held.has('forward') ? 1 : 0) - (held.has('back') ? 1 : 0);
+  const r = (held.has('right') ? 1 : 0) - (held.has('left') ? 1 : 0);
+  if (f || r) walkBy(f * speed, r * speed);
+  const turn = (held.has('turnLeft') ? 1 : 0) - (held.has('turnRight') ? 1 : 0);
+  if (turn) walk.yaw += turn * 1.6 * dt;
+  camera.position.set(walk.x, me.y + me.h * 0.94, walk.z); // 눈높이: 키 1.7 m 면 1.6 m
+  camera.rotation.set(walk.pitch, walk.yaw, 0, 'YXZ');
+  const node = meshes.get(me.id);
+  if (node) node.visible = false; // 내 몸은 보이지 않게
+}
+
+// 걸을 사람을 정한다: 선택한 사람 → 이미 놓인 사람 → 없으면 입구 안쪽(문이 없으면 보고 있는 곳)에 새로 놓는다.
+function findWalker() {
+  const sel = selected();
+  if (sel && sel.type === 'person') return sel;
+  const placed = state.objects.find((o) => o.type === 'person');
+  if (placed) return placed;
+  let x = snap(controls.target.x), z = snap(controls.target.z), rot = 0;
+  const door = state.objects.find((o) => o.type === 'door');
+  if (door) {
+    const c = sceneBounds().getCenter(new THREE.Vector3());
+    const t = rad(door.rot);
+    let nx = Math.sin(t), nz = Math.cos(t);                       // 문에서 수직인 방향
+    if ((c.x - door.x) * nx + (c.z - door.z) * nz < 0) { nx = -nx; nz = -nz; } // 방 안쪽으로
+    x = round(door.x + nx * 1.0); z = round(door.z + nz * 1.0);
+    rot = round(THREE.MathUtils.radToDeg(Math.atan2(-nx, -nz)));  // 안쪽을 바라본다
+  }
+  const o = addObject('person', { x, z, rot, y: door ? door.y : 0 });
+  applyToMesh(o);
+  return o;
+}
+
+function enterWalk() {
+  const me = findWalker();
+  setMode('select');
+  walk.id = me.id;
+  walk.x = me.x; walk.z = me.z; walk.yaw = rad(me.rot); walk.pitch = 0;
+  walk.saved = { position: camera.position.clone(), target: controls.target.clone(), fov: camera.fov };
+  held.clear();
+  controls.enabled = false;
+  camera.fov = 70;
+  camera.updateProjectionMatrix();
+  state.selectedId = null;
+  state.mode = 'walk';
+  refreshUI();
+}
+
+// 걷기를 끝내면 사람을 걸어간 자리에 두고, 화면은 걷기 전 모습으로 돌린다.
+function leaveWalk() {
+  const me = walker();
+  if (me) {
+    me.x = round(walk.x); me.z = round(walk.z);
+    me.rot = round(((THREE.MathUtils.radToDeg(walk.yaw) % 360) + 360) % 360);
+    applyNode(me);
+    const node = meshes.get(me.id);
+    if (node) node.visible = true;
+  }
+  held.clear();
+  camera.fov = walk.saved.fov;
+  camera.updateProjectionMatrix();
+  camera.rotation.order = 'XYZ';
+  camera.position.copy(walk.saved.position);
+  controls.target.copy(walk.saved.target);
+  controls.enabled = true;
+  controls.update();
+  walk.id = null;
+  state.mode = 'select';
+  commit();
+}
+
+window.addEventListener('keyup', (e) => {
+  const key = e.key.toLowerCase();
+  if (WALK_KEYS[key]) held.delete(WALK_KEYS[key]);
+  if (key === 'shift') held.delete('fast');
+});
+window.addEventListener('blur', () => held.clear());
 
 function resize() {
   const { clientWidth: w, clientHeight: h } = view;
@@ -916,6 +1080,7 @@ function wallBetween(a, b) {
 canvas.addEventListener('pointerdown', (e) => {
   if (!e.isPrimary || e.button !== 0) return;
   press = { x: e.clientX, y: e.clientY, moved: false, drag: null };
+  if (state.mode === 'walk') { canvas.setPointerCapture(e.pointerId); return; }
   if (state.mode !== 'select') return;
   // 이미 선택된 물체 위에서 누르면 끌어서 옮기기, 아니면 화면 돌리기
   const hit = pickObject(e);
@@ -930,6 +1095,11 @@ canvas.addEventListener('pointerdown', (e) => {
 canvas.addEventListener('pointermove', (e) => {
   if (state.mode === 'wall') updateWallPreview(e);
   if (!press || !e.isPrimary) return;
+  if (state.mode === 'walk') { // 끌어서 둘러보기
+    lookBy((e.clientX - press.x) * 0.005, (e.clientY - press.y) * 0.005);
+    press.x = e.clientX; press.y = e.clientY;
+    return;
+  }
   if (!press.moved && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 5) return;
   press.moved = true;
   const o = selected();
@@ -950,6 +1120,7 @@ function endPress(e) {
   if (!press || !e.isPrimary) return;
   const { moved, drag } = press;
   press = null;
+  if (state.mode === 'walk') return;
   controls.enabled = true;
   if (drag) {
     if (moved) commit();
@@ -1049,8 +1220,16 @@ document.querySelectorAll('[data-add]').forEach((btn) => {
   });
 });
 
-$('view-3d').addEventListener('click', () => setView('3d'));
-$('view-top').addEventListener('click', () => setView('top'));
+$('view-3d').addEventListener('click', () => { setMode('select'); setView('3d'); });
+$('view-top').addEventListener('click', () => { setMode('select'); setView('top'); });
+$('walk').addEventListener('click', () => (state.mode === 'walk' ? setMode('select') : enterWalk()));
+// 화면 단추(터치용): 누르고 있는 동안 걷거나 돈다
+document.querySelectorAll('#walk-pad [data-walk]').forEach((btn) => {
+  const on = (e) => { e.preventDefault(); held.add(btn.dataset.walk); };
+  const off = () => held.delete(btn.dataset.walk);
+  btn.addEventListener('pointerdown', on);
+  for (const type of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(type, off);
+});
 $('snap').addEventListener('change', (e) => { state.snap = parseFloat(e.target.value) || 0; });
 $('trackpad').addEventListener('change', (e) => {
   state.trackpad = e.target.checked;
@@ -1112,11 +1291,17 @@ window.addEventListener('keydown', (e) => {
 
   if (key === 'escape') {
     if (typing) document.activeElement.blur();
-    else if (state.mode === 'wall') setMode('select');
+    else if (state.mode !== 'select') setMode('select');
     else select(null);
     return;
   }
   if (typing) return;
+
+  if (state.mode === 'walk') { // 걷는 동안에는 이동 키만 받는다
+    if (!mod && WALK_KEYS[key]) { e.preventDefault(); held.add(WALK_KEYS[key]); }
+    if (key === 'shift') held.add('fast');
+    return;
+  }
 
   if (mod && key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
   if (mod && key === 'y') { e.preventDefault(); redo(); return; }
@@ -1162,7 +1347,16 @@ resize();
 setView('3d');
 commit();
 
-renderer.setAnimationLoop(() => {
+let lastFrame = performance.now();
+renderer.setAnimationLoop((now) => {
+  const dt = Math.min((now - lastFrame) / 1000, 0.1);
+  lastFrame = now;
+  if (state.mode === 'walk') {
+    stepWalk(dt);
+    outline.visible = false;
+    renderer.render(scene, camera);
+    return;
+  }
   const o = selected();
   outline.visible = !!o;
   if (o) {
@@ -1175,5 +1369,5 @@ renderer.setAnimationLoop(() => {
 });
 
 // 자동 점검(테스트)에서 장면을 들여다볼 수 있게 열어 둔다.
-window.__home3d = { state, camera, meshes, controls, buildWallGeometry };
+window.__home3d = { state, camera, meshes, controls, buildWallGeometry, walk };
 })();

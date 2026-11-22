@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>공간 3D 만들기</title>
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
 <header id="toolbar">
@@ -23,12 +23,14 @@
     <button data-add="floor">바닥</button>
     <button data-add="box">상자</button>
     <button data-add="cylinder">원기둥</button>
+    <button data-add="person" title="사람을 놓습니다. 놓은 뒤 &quot;걸어 보기&quot;를 누르면 이 사람의 눈높이에서 돌아봅니다">사람</button>
   </div>
 
   <div class="group" role="group" aria-label="보기">
     <span class="label">보기</span>
     <button id="view-3d">입체</button>
     <button id="view-top">위에서</button>
+    <button id="walk" title="사람의 눈높이에서 걸어 다니며 공간을 봅니다. 사람이 없으면 입구에 한 명을 놓습니다 (Esc로 끝내기)">걸어 보기</button>
   </div>
 
   <div class="group">
@@ -68,6 +70,14 @@
   <div id="view">
     <canvas id="canvas"></canvas>
     <div id="hint"></div>
+    <div id="walk-pad" hidden>
+      <button type="button" data-walk="turnLeft" aria-label="왼쪽으로 돌기">⟲</button>
+      <button type="button" data-walk="forward" aria-label="앞으로">▲</button>
+      <button type="button" data-walk="turnRight" aria-label="오른쪽으로 돌기">⟳</button>
+      <button type="button" data-walk="left" aria-label="왼쪽으로 옆걸음">◀</button>
+      <button type="button" data-walk="back" aria-label="뒤로">▼</button>
+      <button type="button" data-walk="right" aria-label="오른쪽으로 옆걸음">▶</button>
+    </div>
   </div>
 
   <aside id="panel">
@@ -127,6 +137,6 @@
 
 <script src="vendor/three.bundle.js?v=170"></script>
 <script src="posters.js?v=2"></script>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -238,6 +238,11 @@ function applyNode(o) {
     const base = node.userData.base || (node.userData.base = node.material);
     setMaterial(base, o.color, o.opacity);
     applyImage(node, o, base);
+    if (o.type === 'floor') applyWood(node, o, base);
+    if (o.decal) { // 벽 글씨: 상자 자체는 보이지 않고 글과 그림만 보인다
+      base.transparent = true; base.opacity = 0; base.depthWrite = false;
+      node.receiveShadow = false;
+    }
     node.castShadow = o.opacity >= 0.5 && !o.image;
   }
 }
@@ -269,9 +274,54 @@ function applyImage(node, o, base) {
     node.userData.image = o.image;
   }
   const face = node.userData.face;
-  face.transparent = o.opacity < 1;
+  face.transparent = o.opacity < 1 || !!o.decal;
   face.opacity = o.opacity;
+  face.depthWrite = !o.decal;
+  face.alphaTest = o.decal ? 0.02 : 0;
   node.material = [base, base, base, base, face, face]; // +x, -x, +y, -y, +z, -z
+}
+
+// 마루 바닥: 널을 이어 붙인 무늬를 한 번 그려 두고, 바닥 크기에 맞춰 되풀이한다(무늬 한 장 = 2.4 m).
+let woodImage = null;
+function woodCanvas() {
+  if (woodImage) return woodImage;
+  const c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const g = c.getContext('2d');
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const rows = 12, rh = 512 / rows;
+  for (let r = 0; r < rows; r++) {
+    let x = -rnd() * 300;
+    while (x < 512) {
+      const len = 220 + rnd() * 260;
+      g.fillStyle = `hsl(${28 + rnd() * 6}, ${42 + rnd() * 10}%, ${60 + rnd() * 9}%)`;
+      g.fillRect(x, r * rh, len, rh);
+      g.strokeStyle = 'rgba(90, 55, 25, 0.10)'; // 나뭇결
+      for (let k = 0; k < 5; k++) { const y = r * rh + rnd() * rh; g.beginPath(); g.moveTo(x, y); g.lineTo(x + len, y + (rnd() - 0.5) * 3); g.stroke(); }
+      g.fillStyle = 'rgba(70, 40, 15, 0.35)';
+      g.fillRect(x + len - 1, r * rh, 1.5, rh); // 널 끝 이음매
+      x += len;
+    }
+    g.fillStyle = 'rgba(70, 40, 15, 0.3)';
+    g.fillRect(0, r * rh, 512, 1.2); // 널 사이 이음매
+  }
+  return (woodImage = c);
+}
+
+function applyWood(node, o, base) {
+  if (o.finish !== 'wood') {
+    if (base.map) { base.map.dispose(); base.map = null; base.needsUpdate = true; }
+    return;
+  }
+  if (!base.map) {
+    base.map = new THREE.CanvasTexture(woodCanvas());
+    base.map.colorSpace = THREE.SRGBColorSpace;
+    base.map.wrapS = base.map.wrapT = THREE.RepeatWrapping;
+    base.map.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    base.needsUpdate = true;
+  }
+  base.map.repeat.set(o.w / 2.4, o.d / 2.4);
 }
 
 function applyToMesh(o) {
@@ -408,7 +458,18 @@ function syncScene() {
   state.objects.forEach(applyNode);
   updateWalls();
   if (!ids.has(state.selectedId)) state.selectedId = null;
+  // 복도공간 전시회의 벽 글씨 그림은 용량이 커서, 그 그림을 쓰는 물체가 있을 때에만 불러온다.
+  if (!hallPosters && state.objects.some((o) => /^hall-/.test(o.slot || ''))) {
+    hallPosters = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = 'posters-hall.js?v=1';
+      el.onload = resolve;
+      el.onerror = reject;
+      document.head.append(el);
+    }).then(syncScene, () => notice('벽 글씨 파일(posters-hall.js)을 불러오지 못했습니다.'));
+  }
 }
+let hallPosters = null;
 
 const selected = () => state.objects.find((o) => o.id === state.selectedId) || null;
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -453,6 +514,8 @@ function sanitize(list) {
       ...(typeof r.group === 'string' && r.group ? { group: r.group.slice(0, 40) } : {}),
       ...(typeof r.image === 'string' && /^poster:[\w-]{1,40}$/.test(r.image) ? { image: r.image } : {}),
       ...(r.deco === 'xmas' ? { deco: 'xmas' } : {}),
+      ...(r.decal === true ? { decal: true } : {}),
+      ...(r.finish === 'wood' ? { finish: 'wood' } : {}),
       ...(typeof r.slot === 'string' && /^[\w-]{1,40}$/.test(r.slot) ? { slot: r.slot } : {}),
     };
   });
@@ -718,8 +781,88 @@ const ZONES = [
 // 전시 공간의 크기: 가로, 세로, 천장 높이, 벽 두께, 바닥 두께 (m). 방 크기가 정해지면 W, D 만 바꾸면 된다.
 const GALLERY = { W: 10, D: 8, H: 2.6, T: 0.15, F: 0.05 };
 
-// "크리스마스 꾸미기": 전시 공간에 카펫과 소품을 더한다. 다시 누르면 꾸민 것만 뺀다(deco: 'xmas' 표시).
-// 트리·탁자·수납장·입구는 지금 놓인 자리를 찾아 그 주변을 꾸미므로, 옮긴 뒤에 눌러도 따라간다.
+// 복도공간 전시회의 크기: 길이, 폭, 바닥 두께 (m). 폭 8 m 의 다리 같은 복도로, 벽 없이 양옆은 난간이다.
+const HALL = { L: 36, W: 8, F: 0.05 };
+const XMAS = { RED: '#a8322d', GREEN: '#1f6b3a', GOLD: '#f0b429', SNOW: '#fbfbf8', DARK: '#2b2f36', BERRY: '#d64545' };
+
+// 상자 트리: 정육면체 4개를 점점 작게 쌓는다. 옆면 4 × 4단 = 16면에 포스터를 붙일 수 있다.
+function boxTree(add, name, x, z, F) {
+  const sizes = [0.8, 0.65, 0.5, 0.35], greens = ['#1f6b3a', '#2a7d46', '#34904f', '#3fa35a'];
+  let y = F;
+  sizes.forEach((size, i) => {
+    add('box', `${name} ${i + 1}단`, { w: size, h: size, d: size, x, z, y: round(y), rot: i % 2 ? 45 : 0, color: greens[i], group: name });
+    y += size;
+  });
+  add('box', `${name} 별`, { w: 0.16, h: 0.16, d: 0.16, x, z, y: round(y), rot: 45, color: '#f0b429', group: name });
+  add('box', `${name} 선물 1`, { w: 0.3, h: 0.25, d: 0.3, x: round(x - 0.75), z: round(z + 0.45), y: F, rot: 20, color: '#d64545' });
+  add('box', `${name} 선물 2`, { w: 0.25, h: 0.2, d: 0.35, x: round(x + 0.7), z: round(z + 0.55), y: F, rot: -15, color: '#f0b429' });
+}
+
+// ── 크리스마스 소품 조각들 (add 는 deco: 'xmas' 를 붙여 주는 함수) ──
+const deco = {
+  // 상자 트리: 발치 카펫, 단마다 모서리에 장식 공
+  boxTree(add, tree, F) {
+    const tiers = state.objects.filter((o) => o.group === tree && /단$/.test(o.name));
+    if (!tiers.length) return;
+    add('cylinder', `${tree} 발치 카펫`, { w: 1.5, d: 1.5, h: 0.012, x: tiers[0].x, z: tiers[0].z, y: F, color: XMAS.RED });
+    tiers.slice(0, 3).forEach((tier, i) => {
+      for (let k = 0; k < 4; k++) {
+        const angle = rad(tier.rot + 45 + k * 90), reach = (tier.w / Math.SQRT2) * 0.82;
+        add('sphere', `${tree} 장식 공 ${i * 4 + k + 1}`, {
+          w: 0.11, h: 0.11, d: 0.11, x: round(tier.x + Math.cos(angle) * reach), z: round(tier.z - Math.sin(angle) * reach),
+          y: round(tier.y + tier.h), color: (i + k) % 2 ? XMAS.GOLD : XMAS.BERRY, group: tree,
+        });
+      }
+    });
+  },
+  // 화분에 심은 작은 트리(화분 + 원뿔 + 별)
+  potTree(add, group, x, z, F) {
+    add('cylinder', `${group} 화분`, { w: 0.28, d: 0.28, h: 0.25, x, z, y: F, color: XMAS.RED, group });
+    add('cone', `${group} 나무`, { w: 0.36, d: 0.36, h: 0.95, x, z, y: F + 0.25, color: XMAS.GREEN, group });
+    add('box', `${group} 별`, { w: 0.08, h: 0.08, d: 0.08, x, z, y: F + 1.19, rot: 45, color: XMAS.GOLD, group });
+  },
+  // 탁자 위: 러너, 미니 트리, 양초
+  table(add, table, F) {
+    const top = F + (table.h || 0.72), group = '탁자 장식';
+    add('box', '탁자 러너', { w: 1.8, d: 0.3, h: 0.008, x: table.x, z: table.z, y: top, color: XMAS.RED, group });
+    add('cone', '탁자 미니 트리', { w: 0.2, d: 0.2, h: 0.36, x: table.x, z: table.z, y: top + 0.008, color: XMAS.GREEN, group });
+    add('box', '탁자 미니 트리 별', { w: 0.05, h: 0.05, d: 0.05, x: table.x, z: table.z, y: top + 0.36, rot: 45, color: XMAS.GOLD, group });
+    for (const dx of [-0.55, 0.55]) add('cylinder', `탁자 양초 ${dx < 0 ? 1 : 2}`, { w: 0.07, d: 0.07, h: 0.14, x: round(table.x + dx), z: table.z, y: top + 0.008, color: XMAS.SNOW, group });
+  },
+  // 커피 수납장 위: 미니 트리와 장식 공 (수납장의 긴 쪽으로 0.4 m 옆)
+  counter(add, counter) {
+    const t = rad(counter.rot), ax = Math.cos(t), az = -Math.sin(t), group = '수납장 장식', y = counter.y + counter.h;
+    add('cone', '수납장 미니 트리', { w: 0.22, d: 0.22, h: 0.4, x: round(counter.x - ax * 0.4), z: round(counter.z - az * 0.4), y, color: XMAS.GREEN, group });
+    add('sphere', '수납장 장식 공', { w: 0.1, h: 0.1, d: 0.1, x: round(counter.x - ax * 0.15), z: round(counter.z - az * 0.15), y, color: XMAS.GOLD, group });
+  },
+  // 빨강·하양 줄무늬 지팡이 사탕 기둥
+  candyPole(add, group, x, z, F) {
+    for (let k = 0; k < 6; k++) add('cylinder', `${group} ${k + 1}`, { w: 0.09, d: 0.09, h: 0.2, x, z, y: round(F + k * 0.2), color: k % 2 ? XMAS.SNOW : XMAS.BERRY, group });
+  },
+  // 눈사람: face = 코가 향하는 쪽 [dx, dz]
+  snowman(add, x, z, y, face = [0, -1]) {
+    const group = '눈사람';
+    add('sphere', '눈사람 몸 아래', { w: 0.7, h: 0.6, d: 0.7, x, z, y, color: XMAS.SNOW, group });
+    add('sphere', '눈사람 몸 가운데', { w: 0.5, h: 0.45, d: 0.5, x, z, y: y + 0.52, color: XMAS.SNOW, group });
+    add('sphere', '눈사람 머리', { w: 0.34, h: 0.34, d: 0.34, x, z, y: y + 0.9, color: XMAS.SNOW, group });
+    add('cylinder', '눈사람 목도리', { w: 0.36, d: 0.36, h: 0.06, x, z, y: y + 0.9, color: XMAS.BERRY, group });
+    add('box', '눈사람 코', { w: face[0] ? 0.14 : 0.05, h: 0.05, d: face[0] ? 0.05 : 0.14, x: round(x + face[0] * 0.2), z: round(z + face[1] * 0.2), y: y + 1.04, color: '#f08a24', group });
+    add('cylinder', '눈사람 모자 챙', { w: 0.36, d: 0.36, h: 0.03, x, z, y: y + 1.2, color: XMAS.DARK, group });
+    add('cylinder', '눈사람 모자', { w: 0.24, d: 0.24, h: 0.2, x, z, y: y + 1.23, color: XMAS.DARK, group });
+  },
+  // 리본 묶은 선물 세 개를 쌓은 더미
+  gifts(add, gx, gz, F, label = '선물') {
+    [[0, 0, 0.4, 0.3, XMAS.RED, XMAS.GOLD], [0.38, 0.1, 0.3, 0.22, XMAS.GREEN, XMAS.BERRY], [0.1, 0.02, 0.24, 0.2, XMAS.GOLD, XMAS.RED]].forEach(([dx, dz, size, h, color, ribbon], i) => {
+      const group = `${label} ${i + 1}`, x = round(gx + dx), z = round(gz + dz), y = i === 2 ? F + 0.3 : F, rot = [12, -20, 30][i];
+      add('box', `${group} 상자`, { w: size, d: size, h, x, z, y, rot, color, group });
+      add('box', `${group} 리본 가로`, { w: size + 0.01, d: size * 0.16, h: h + 0.005, x, z, y, rot, color: ribbon, group });
+      add('box', `${group} 리본 세로`, { w: size * 0.16, d: size + 0.01, h: h + 0.005, x, z, y, rot, color: ribbon, group });
+    });
+  },
+};
+
+// "크리스마스 꾸미기": 지금 공간(전시 공간 또는 복도공간 전시회)에 카펫과 소품을 더한다.
+// 다시 누르면 꾸민 것만 뺀다(deco: 'xmas' 표시). 트리·탁자·수납장은 놓인 자리를 찾아 꾸민다.
 function toggleXmas() {
   if (state.objects.some((o) => o.deco === 'xmas')) {
     state.objects = state.objects.filter((o) => o.deco !== 'xmas');
@@ -727,106 +870,93 @@ function toggleXmas() {
     commit();
     return notice('크리스마스 장식을 뺐습니다. 다시 누르면 꾸며집니다.');
   }
-  if (!state.objects.some((o) => o.name === '가운데 가벽')) gallerySpace();
+  const inHall = state.objects.some((o) => o.name === '복도 바닥');
+  if (!inHall && !state.objects.some((o) => o.name === '가운데 가벽')) gallerySpace();
   const before = state.objects.length;
+  (inHall ? decorateHall : decorateGallery)();
+  state.selectedId = null;
+  syncScene();
+  commit();
+  notice(`크리스마스 장식 ${state.objects.length - before}개를 놓았습니다. 다시 누르면 빠집니다.`);
+}
+
+function decorateGallery() {
   const { W, D, H, T, F } = GALLERY;
-  const RED = '#a8322d', GREEN = '#1f6b3a', GOLD = '#f0b429', SNOW = '#fbfbf8', DARK = '#2b2f36';
   const add = (type, name, props) => addObject(type, { name, deco: 'xmas', ...props });
   const named = (name) => state.objects.find((o) => o.name === name);
   const midZ = round(-D / 2 + 3.2), midLen = W - 2.6, inner = T / 2 + 0.04; // 벽 안쪽 면에서 살짝 띄움
   const door = named('입구') || { x: round(-W / 2 + 1.2), z: D / 2 };
 
-  // ── 카펫 ──
+  // 카펫
   const hallZ = round((-D / 2 + midZ) / 2);
-  add('floor', '복도 레드카펫', { w: W - 1, d: 1.2, h: 0.01, z: hallZ, y: F, color: RED });
-  add('floor', '복도 카펫 금색 띠 1', { w: W - 1, d: 0.06, h: 0.012, z: round(hallZ - 0.5), y: F, color: GOLD });
-  add('floor', '복도 카펫 금색 띠 2', { w: W - 1, d: 0.06, h: 0.012, z: round(hallZ + 0.5), y: F, color: GOLD });
-  add('floor', '가벽 앞 초록 카펫', { w: midLen, d: 1, h: 0.01, z: round(midZ + 0.75), y: F, color: GREEN });
+  add('floor', '복도 레드카펫', { w: W - 1, d: 1.2, h: 0.01, z: hallZ, y: F, color: XMAS.RED });
+  add('floor', '복도 카펫 금색 띠 1', { w: W - 1, d: 0.06, h: 0.012, z: round(hallZ - 0.5), y: F, color: XMAS.GOLD });
+  add('floor', '복도 카펫 금색 띠 2', { w: W - 1, d: 0.06, h: 0.012, z: round(hallZ + 0.5), y: F, color: XMAS.GOLD });
+  add('floor', '가벽 앞 초록 카펫', { w: midLen, d: 1, h: 0.01, z: round(midZ + 0.75), y: F, color: XMAS.GREEN });
   const table = named('탁자') || { x: round(W / 2 - 2.3), z: round(D / 2 - 1.9), h: 0.72 };
-  add('cylinder', '이야기 자리 둥근 카펫', { w: 3, d: 3, h: 0.01, x: table.x, z: table.z, y: F, color: GREEN });
+  add('cylinder', '이야기 자리 둥근 카펫', { w: 3, d: 3, h: 0.01, x: table.x, z: table.z, y: F, color: XMAS.GREEN });
 
-  // ── 상자 트리 꾸미기: 발치 카펫, 단마다 모서리에 장식 공 ──
-  for (const tree of ['트리 1', '트리 2']) {
-    const tiers = state.objects.filter((o) => o.group === tree && /단$/.test(o.name));
-    if (!tiers.length) continue;
-    add('cylinder', `${tree} 발치 카펫`, { w: 1.5, d: 1.5, h: 0.012, x: tiers[0].x, z: tiers[0].z, y: F, color: RED });
-    tiers.slice(0, 3).forEach((tier, i) => {
-      for (let k = 0; k < 4; k++) {
-        const angle = rad(tier.rot + 45 + k * 90), reach = (tier.w / Math.SQRT2) * 0.82;
-        add('sphere', `${tree} 장식 공 ${i * 4 + k + 1}`, {
-          w: 0.11, h: 0.11, d: 0.11, x: round(tier.x + Math.cos(angle) * reach), z: round(tier.z - Math.sin(angle) * reach),
-          y: round(tier.y + tier.h), color: (i + k) % 2 ? GOLD : '#d64545', group: tree,
-        });
-      }
-    });
-  }
+  for (const tree of ['트리 1', '트리 2']) deco.boxTree(add, tree, F);
 
-  // ── 전구 줄: 벽 위쪽과 가벽 위 ──
+  // 전구 줄: 벽 위쪽과 가벽 위
   add('lights', '뒤쪽 벽 전구 줄', { w: W - 0.3, z: round(-D / 2 + inner), y: 2.3 });
   add('lights', '왼쪽 벽 전구 줄', { w: D - 0.3, x: round(-W / 2 + inner), rot: 90, y: 2.3 });
   add('lights', '오른쪽 벽 전구 줄', { w: D - 0.3, x: round(W / 2 - inner), rot: 90, y: 2.3 });
   add('lights', '유리벽 전구 줄', { w: W - 0.3, z: round(D / 2 - inner), y: 2.3 });
   add('lights', '가벽 전구 줄', { w: midLen, z: midZ, y: 2.2 });
 
-  // ── 리스: 높은 벽의 관 소개 위, 그리고 입구 문 ──
+  // 리스: 높은 벽의 관 소개 위, 그리고 입구 문
   for (const slot of ['zone1', 'zone4', 'zone5']) {
     const panel = state.objects.find((o) => o.slot === slot);
     if (panel) add('wreath', `${panel.name.slice(0, 3)} 리스`, { x: panel.x, z: panel.z, rot: panel.rot, y: round(Math.min(panel.y + panel.h + 0.03, H - 0.47)) });
   }
   add('wreath', '입구 리스', { x: door.x, z: door.z, rot: door.rot || 0, y: 1.45, d: 0.2 });
 
-  // ── 가벽 양 끝의 작은 트리(화분 + 원뿔 + 별) ──
-  [-1, 1].forEach((side, i) => {
-    const group = `작은 트리 ${i + 1}`, x = round(side * (midLen / 2 + 0.2));
-    add('cylinder', `${group} 화분`, { w: 0.28, d: 0.28, h: 0.25, x, z: midZ, y: F, color: RED, group });
-    add('cone', `${group} 나무`, { w: 0.36, d: 0.36, h: 0.95, x, z: midZ, y: F + 0.25, color: GREEN, group });
-    add('box', `${group} 별`, { w: 0.08, h: 0.08, d: 0.08, x, z: midZ, y: F + 1.19, rot: 45, color: GOLD, group });
-  });
+  [-1, 1].forEach((side, i) => deco.potTree(add, `작은 트리 ${i + 1}`, round(side * (midLen / 2 + 0.2)), midZ, F));
+  deco.table(add, table, F);
+  if (named('커피 수납장')) deco.counter(add, named('커피 수납장'));
+  [-0.68, 0.68].forEach((dx, i) => deco.candyPole(add, `지팡이 사탕 기둥 ${i + 1}`, round(door.x + dx), round(door.z - 0.35), F));
+  deco.snowman(add, round(door.x + 1.7), round(door.z + 0.9), 0); // 유리벽 밖에서 맞이한다
+  const board = state.objects.find((o) => o.slot === 'main');
+  deco.gifts(add, board ? board.x + 0.85 : door.x + 2, board ? board.z + 0.25 : door.z - 1.5, F);
+}
 
-  // ── 탁자와 커피 수납장 위 ──
-  const top = F + (table.h || 0.72);
-  add('box', '탁자 러너', { w: 1.8, d: 0.3, h: 0.008, x: table.x, z: table.z, y: top, color: RED, group: '탁자 장식' });
-  add('cone', '탁자 미니 트리', { w: 0.2, d: 0.2, h: 0.36, x: table.x, z: table.z, y: top + 0.008, color: GREEN, group: '탁자 장식' });
-  add('box', '탁자 미니 트리 별', { w: 0.05, h: 0.05, d: 0.05, x: table.x, z: table.z, y: top + 0.36, rot: 45, color: GOLD, group: '탁자 장식' });
-  for (const dx of [-0.55, 0.55]) add('cylinder', `탁자 양초 ${dx < 0 ? 1 : 2}`, { w: 0.07, d: 0.07, h: 0.14, x: round(table.x + dx), z: table.z, y: top + 0.008, color: SNOW, group: '탁자 장식' });
-  const counter = named('커피 수납장');
-  if (counter) {
-    add('cone', '수납장 미니 트리', { w: 0.22, d: 0.22, h: 0.4, x: counter.x, z: round(counter.z + 0.4), y: counter.y + counter.h, color: GREEN, group: '수납장 장식' });
-    add('sphere', '수납장 장식 공', { w: 0.1, h: 0.1, d: 0.1, x: counter.x, z: round(counter.z + 0.15), y: counter.y + counter.h, color: GOLD, group: '수납장 장식' });
+function decorateHall() {
+  const { L, W, F } = HALL;
+  const add = (type, name, props) => addObject(type, { name, deco: 'xmas', ...props });
+  const named = (name) => state.objects.find((o) => o.name === name);
+
+  // 카펫: 가운데 길을 따라 금색 띠를 두른 레드카펫, 들머리 초록 카펫, 이야기 자리 둥근 카펫. 마루는 넉넉히 드러나게 둔다.
+  add('floor', '가운데 레드카펫', { w: L - 9, d: 1.5, h: 0.01, x: 0.5, y: F, color: XMAS.RED });
+  add('floor', '레드카펫 금색 띠 1', { w: L - 9, d: 0.06, h: 0.012, x: 0.5, z: -0.65, y: F, color: XMAS.GOLD });
+  add('floor', '레드카펫 금색 띠 2', { w: L - 9, d: 0.06, h: 0.012, x: 0.5, z: 0.65, y: F, color: XMAS.GOLD });
+  add('floor', '들머리 초록 카펫', { w: 1.6, d: 3.2, h: 0.01, x: round(-L / 2 + 1), y: F, color: XMAS.GREEN });
+  const table = named('탁자') || { x: round(L / 2 - 2.4), z: 0, h: 0.72 };
+  add('cylinder', '이야기 자리 둥근 카펫', { w: 3.2, d: 3.2, h: 0.012, x: table.x, z: table.z, y: F, color: XMAS.GREEN });
+
+  for (const tree of ['트리 1', '트리 2']) deco.boxTree(add, tree, F);
+
+  // 전구 줄: 가벽마다 위에, 그리고 양쪽 난간을 따라
+  const walls = state.objects.filter((o) => o.type === 'wall' && /가벽$/.test(o.name));
+  walls.forEach((wall) => add('lights', `${wall.name} 전구 줄`, { w: wall.w, x: wall.x, z: wall.z, rot: wall.rot, y: wall.y + wall.h }));
+  for (const side of [-1, 1]) add('lights', `${side < 0 ? '뒤쪽' : '앞쪽'} 난간 전구 줄`, { w: L - 0.4, z: round(side * (W / 2 - 0.09)), y: 1.14 });
+
+  // 리스: 난간 안쪽에 6 m 마다
+  for (const side of [-1, 1]) {
+    for (let x = -L / 2 + 3, i = 1; x < L / 2; x += 6, i++) {
+      add('wreath', `${side < 0 ? '뒤쪽' : '앞쪽'} 난간 리스 ${i}`, { w: 0.4, h: 0.4, x, z: round(side * (W / 2 - 0.1)), y: 0.55 });
+    }
   }
 
-  // ── 입구 안쪽 양옆의 지팡이 사탕 기둥(빨강·하양 줄무늬) ──
-  [-0.68, 0.68].forEach((dx, i) => {
-    const group = `지팡이 사탕 기둥 ${i + 1}`;
-    for (let k = 0; k < 6; k++) {
-      add('cylinder', `${group} ${k + 1}`, { w: 0.09, d: 0.09, h: 0.2, x: round(door.x + dx), z: round(door.z - 0.35), y: round(F + k * 0.2), color: k % 2 ? SNOW : '#d64545', group });
-    }
-  });
+  // 작은 트리: 가벽마다 들어오는 쪽 끝에 하나씩 (길을 막지 않도록 가벽과 한 줄로)
+  walls.filter((wall) => !wall.rot).forEach((wall, i) => deco.potTree(add, `작은 트리 ${i + 1}`, round(wall.x - wall.w / 2 - 0.28), wall.z, F));
 
-  // ── 유리벽 밖에서 맞이하는 눈사람 ──
-  const sx = round(door.x + 1.7), sz = round(door.z + 0.9), snowman = '눈사람';
-  add('sphere', '눈사람 몸 아래', { w: 0.7, h: 0.6, d: 0.7, x: sx, z: sz, y: 0, color: SNOW, group: snowman });
-  add('sphere', '눈사람 몸 가운데', { w: 0.5, h: 0.45, d: 0.5, x: sx, z: sz, y: 0.52, color: SNOW, group: snowman });
-  add('sphere', '눈사람 머리', { w: 0.34, h: 0.34, d: 0.34, x: sx, z: sz, y: 0.9, color: SNOW, group: snowman });
-  add('cylinder', '눈사람 목도리', { w: 0.36, d: 0.36, h: 0.06, x: sx, z: sz, y: 0.9, color: '#d64545', group: snowman });
-  add('box', '눈사람 코', { w: 0.05, h: 0.05, d: 0.14, x: sx, z: round(sz - 0.2), y: 1.04, color: '#f08a24', group: snowman });
-  add('cylinder', '눈사람 모자 챙', { w: 0.36, d: 0.36, h: 0.03, x: sx, z: sz, y: 1.2, color: DARK, group: snowman });
-  add('cylinder', '눈사람 모자', { w: 0.24, d: 0.24, h: 0.2, x: sx, z: sz, y: 1.23, color: DARK, group: snowman });
-
-  // ── 선물 더미: 서문 세움판 옆 ──
-  const board = state.objects.find((o) => o.slot === 'main');
-  const gx = board ? board.x + 0.85 : door.x + 2, gz = board ? board.z + 0.25 : door.z - 1.5;
-  [[0, 0, 0.4, 0.3, RED, GOLD], [0.38, 0.1, 0.3, 0.22, GREEN, '#d64545'], [0.1, 0.02, 0.24, 0.2, GOLD, RED]].forEach(([dx, dz, size, h, color, ribbon], i) => {
-    const group = `선물 ${i + 1}`, x = round(gx + dx), z = round(gz + dz), y = i === 2 ? F + 0.3 : F, rot = [12, -20, 30][i];
-    add('box', `${group} 상자`, { w: size, d: size, h, x, z, y, rot, color, group });
-    add('box', `${group} 리본 가로`, { w: size + 0.01, d: size * 0.16, h: h + 0.005, x, z, y, rot, color: ribbon, group });
-    add('box', `${group} 리본 세로`, { w: size * 0.16, d: size + 0.01, h: h + 0.005, x, z, y, rot, color: ribbon, group });
-  });
-
-  state.selectedId = null;
-  syncScene();
-  commit();
-  notice(`크리스마스 장식 ${state.objects.length - before}개를 놓았습니다. 다시 누르면 빠집니다.`);
+  deco.table(add, table, F);
+  if (named('커피 수납장')) deco.counter(add, named('커피 수납장'));
+  [-1.9, 1.9].forEach((z, i) => deco.candyPole(add, `지팡이 사탕 기둥 ${i + 1}`, round(-L / 2 + 0.15), z, F));
+  deco.snowman(add, round(-L / 2 + 0.9), round(-W / 2 + 1.2), F, [-1, 0]); // 들어오는 사람을 바라본다
+  const title = named('서문 가벽');
+  if (title) deco.gifts(add, title.x + 0.35, title.z + title.w / 2 + 0.45, F);
 }
 
 const EMPTY_PANEL = '#fff8e7', FILLED_PANEL = '#f6f5f1'; // 빈 전시판 색, 자료를 넣은 전시판 색(= 벽 색)
@@ -897,21 +1027,9 @@ function gallerySpace() {
   // 전시 서문: 입구로 들어오면 바로 보이는 세움판
   add('box', '전시 서문', { w: 1.2, h: 1.7, d: 0.04, x: round(doorX + 1.15), z: round(D / 2 - 1.7), y: F, rot: -25, color: EMPTY_PANEL, slot: 'main' });
 
-  // 상자 트리: 정육면체 4개를 점점 작게 쌓는다. 옆면 4 × 4단 = 16면에 포스터를 붙일 수 있다.
-  const tree = (name, x, z) => {
-    const sizes = [0.8, 0.65, 0.5, 0.35], greens = ['#1f6b3a', '#2a7d46', '#34904f', '#3fa35a'];
-    let y = F;
-    sizes.forEach((size, i) => {
-      add('box', `${name} ${i + 1}단`, { w: size, h: size, d: size, x, z, y: round(y), rot: i % 2 ? 45 : 0, color: greens[i], group: name });
-      y += size;
-    });
-    add('box', `${name} 별`, { w: 0.16, h: 0.16, d: 0.16, x, z, y: round(y), rot: 45, color: '#f0b429', group: name });
-    add('box', `${name} 선물 1`, { w: 0.3, h: 0.25, d: 0.3, x: round(x - 0.75), z: round(z + 0.45), y: F, rot: 20, color: '#d64545' });
-    add('box', `${name} 선물 2`, { w: 0.25, h: 0.2, d: 0.35, x: round(x + 0.7), z: round(z + 0.55), y: F, rot: -15, color: '#f0b429' });
-  };
   const treeZ = round(midZ + 2.1);
-  tree('트리 1', round(-W * 0.14), treeZ);
-  tree('트리 2', round(W * 0.06), treeZ);
+  boxTree(add, '트리 1', round(-W * 0.14), treeZ, F);
+  boxTree(add, '트리 2', round(W * 0.06), treeZ, F);
 
   // 입구 옆 유리벽 앞에 이동식 화면 3대(받침 + 기둥 + 화면), 방 안쪽을 바라본다.
   for (let i = 0; i < 3; i++) {
@@ -935,6 +1053,80 @@ function gallerySpace() {
   add('box', '커피 수납장', { w: 1.4, d: 0.55, h: 0.9, x: cx, z: cz, y: F, rot: 90, color: WHITE, group: '커피 코너' });
   add('box', '커피 머신', { w: 0.4, d: 0.3, h: 0.42, x: cx, z: round(cz - 0.3), y: F + 0.9, rot: 90, color: DARK, group: '커피 코너' });
 
+  state.selectedId = null;
+  syncScene();
+  commit();
+  setView('3d');
+}
+
+// 복도공간 전시회: 폭 8 m, 길이 36 m(가정)의 다리 같은 복도. 벽이 없고 양옆은 난간이며 바닥은 마루다.
+// 전시는 모두 복도 방향으로 길게 놓은 가벽에 한다. 가벽은 뒤쪽 줄(제1·3·5관)과 앞쪽 줄(제2·4관)에
+// 서로 엇갈리게 놓아, 복도 방향으로는 세 갈래 길(양옆 2.4 m, 가운데 3.2 m)이 끝까지 뚫려 있고
+// 가벽 사이 틈으로 가로질러 다닐 수 있다. 연구회 자료는 판을 붙이지 않고 가벽에 직접 쓴 글처럼 넣는다.
+function hallSpace() {
+  const { L, W, F } = HALL;
+  const GREEN = '#1f5a3a', RED = '#8f2a25', CREAM = '#f3ead9', GLASS = '#a9d3e8', WOOD = '#a9825a', DARK = '#2b2f36';
+  state.objects = [];
+  const add = (type, name, props) => addObject(type, { name, ...props });
+
+  add('floor', '복도 바닥', { w: L, d: W, h: F, color: '#ffffff', finish: 'wood' });
+  for (const side of [-1, 1]) { // 유리 난간과 손잡이
+    const label = side < 0 ? '뒤쪽' : '앞쪽', z = round(side * (W / 2 - 0.03));
+    add('wall', `${label} 난간`, { w: L, d: 0.04, h: 1.1, z, color: GLASS, opacity: 0.3 });
+    add('box', `${label} 난간 손잡이`, { w: L, d: 0.08, h: 0.05, z, y: 1.1, color: '#d9d9d6' });
+  }
+
+  // 벽 글씨: 가로 2.3 × 세로 1.3 m, 한 구획 2.5 m. 상자는 보이지 않고 글과 그림만 가벽 위에 보인다.
+  const SECTION = 2.5, WALL_T = 0.12, lift = WALL_T / 2 + 0.004;
+  const letter = (name, slot, props) => add('box', name, { w: 2.3, h: 1.303, d: 0.004, y: 0.6, slot, image: `poster:${slot}`, decal: true, ...props });
+
+  // 들머리의 서문 가벽: 복도를 가로질러 서 있고(양옆으로 2.6 m 씩 열림), 들어오는 쪽 면에 서문
+  const titleX = round(-L / 2 + 2.5);
+  add('wall', '서문 가벽', { w: 2.7, d: WALL_T, h: 2.2, x: titleX, rot: 90, color: CREAM });
+  letter('전시 서문', 'hall-main', { x: round(titleX - lift), rot: 90, color: CREAM });
+
+  // 전시관 가벽 다섯: [가운데 x, 줄(-1 뒤 / +1 앞), 한 면의 구획 수]
+  const rows = [[-9.75, -1, 3], [-4.5, 1, 3], [0.75, -1, 3], [6, 1, 3], [10, -1, 2]];
+  let room = 1;
+  ZONES.forEach((zone, i) => {
+    const [cx, row, n] = rows[i], z0 = row * 1.6, len = n * SECTION, color = i % 2 ? RED : GREEN;
+    add('wall', `제${i + 1}관 가벽`, { w: len, d: WALL_T, h: 2.2, x: cx, z: z0, color });
+    const items = [[zone.title, `hall-zone${i + 1}`], ...zone.rooms.map((name) => [name, `hall-room${String(room++).padStart(2, '0')}`])];
+    const inner = items.slice(0, n), outer = items.slice(n); // 가운데 길 쪽 면, 난간 쪽 면
+    const hang = (list, sideZ) => list.forEach(([name, slot], k) => {
+      letter(name, slot, { x: round(cx + (k - (list.length - 1) / 2) * SECTION), z: round(z0 + sideZ * lift), color });
+    });
+    hang(inner, -row);
+    hang(outer, row);
+  });
+
+  // 상자 트리 2그루: 앞쪽 줄의 빈 자리에
+  boxTree(add, '트리 1', -11.5, 1.8, F);
+  boxTree(add, '트리 2', 12, 1.9, F);
+
+  // 들머리 앞쪽 난간 앞에 이동식 화면 3대
+  for (let i = 0; i < 3; i++) {
+    const group = `이동식 화면 ${i + 1}`, x = round(-L / 2 + 0.9 + i * 1.1), z = round(W / 2 - 0.7);
+    add('cylinder', `${group} 받침`, { w: 0.42, d: 0.42, h: 0.03, x, z, y: F, color: '#e8e4dc', group });
+    add('cylinder', `${group} 기둥`, { w: 0.04, d: 0.04, h: 1.05, x, z: round(z + 0.03), y: F + 0.03, color: '#e8e4dc', group });
+    add('box', `${group} 화면`, { w: 0.62, h: 0.37, d: 0.03, x, z, y: 0.95, color: DARK, group });
+  }
+
+  // 끝자락의 이야기 자리: 탁자 + 의자 6개, 뒤쪽 난간 앞에 커피 수납장
+  const tx = round(L / 2 - 2.4);
+  add('box', '탁자', { w: 1.8, d: 0.9, h: 0.72, x: tx, z: 0, y: F, color: WOOD, group: '이야기 자리' });
+  let chair = 1;
+  for (const dz of [-0.8, 0.8]) {
+    for (const dx of [-0.6, 0, 0.6]) add('cylinder', `의자 ${chair++}`, { w: 0.38, d: 0.38, h: 0.45, x: round(tx + dx), z: dz, y: F, color: '#a8322d', group: '이야기 자리' });
+  }
+  const cz = round(-W / 2 + 0.4);
+  add('box', '커피 수납장', { w: 1.4, d: 0.55, h: 0.9, x: tx, z: cz, y: F, color: CREAM, group: '커피 코너' });
+  add('box', '커피 머신', { w: 0.4, d: 0.3, h: 0.42, x: round(tx + 0.3), z: cz, y: F + 0.9, color: DARK, group: '커피 코너' });
+
+  // 관람객: "걸어 보기"를 누르면 이 사람의 눈으로 들머리에서 걷기 시작한다
+  add('person', '관람객', { x: round(-L / 2 + 0.8), z: 0.9, y: F, rot: 270 });
+
+  decorateHall();
   state.selectedId = null;
   syncScene();
   commit();
@@ -1393,7 +1585,7 @@ $('trackpad').addEventListener('change', (e) => {
 });
 $('undo').addEventListener('click', undo);
 $('redo').addEventListener('click', redo);
-const PRESETS = { sample: sampleRoom, gallery: gallerySpace };
+const PRESETS = { sample: sampleRoom, gallery: gallerySpace, hall: hallSpace };
 for (const [id, build] of Object.entries(PRESETS)) {
   $(id).addEventListener('click', () => {
     const label = $(id).textContent;

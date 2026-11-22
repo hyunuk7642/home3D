@@ -440,9 +440,21 @@ function refreshList() {
   $('count').textContent = state.objects.length ? `${state.objects.length}개` : '';
 }
 
+// 잠깐 보여 주는 알림. 몇 초 뒤 평소 안내로 돌아간다.
+let noticeText = '';
+let noticeTimer = 0;
+function notice(text) {
+  noticeText = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { noticeText = ''; refreshHint(); }, 5000);
+  refreshHint();
+}
+
 function refreshHint() {
   let text;
-  if (state.mode === 'wall') {
+  if (noticeText) {
+    text = noticeText;
+  } else if (state.mode === 'wall') {
     text = wallStart
       ? '벽이 끝날 곳을 누르세요. 이어서 계속 그릴 수 있고, Esc로 끝냅니다.'
       : '벽이 시작할 곳을 바닥에서 누르세요.';
@@ -973,16 +985,19 @@ const PRESETS = { sample: sampleRoom, gallery: gallerySpace };
 for (const [id, build] of Object.entries(PRESETS)) {
   $(id).addEventListener('click', () => {
     const label = $(id).textContent;
-    if (state.objects.length && !confirm(`지금 공간을 지우고 "${label}"(으)로 바꿀까요? (되돌리기로 복구할 수 있습니다)`)) return;
+    // 확인창(confirm)은 쓰지 않는다: 다른 페이지 안에 끼워 넣은 화면이나 일부 브라우저에서는
+    // 확인창이 막혀 단추가 아무 반응이 없게 된다. 대신 되돌리기로 복구할 수 있다.
+    const hadObjects = state.objects.length > 0;
     build();
+    notice(hadObjects ? `"${label}"(으)로 바꿨습니다. 이전 공간은 "되돌리기"로 복구할 수 있습니다.` : `"${label}"을(를) 불러왔습니다.`);
   });
 }
 $('clear').addEventListener('click', () => {
   if (!state.objects.length) return;
-  if (!confirm('모든 물체를 지울까요? (되돌리기로 복구할 수 있습니다)')) return;
   state.objects = [];
   syncScene();
   commit();
+  notice('모두 지웠습니다. "되돌리기"로 복구할 수 있습니다.');
 });
 
 $('export').addEventListener('click', () => {

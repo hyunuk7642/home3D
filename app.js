@@ -588,40 +588,45 @@ function sampleRoom() {
   setView('3d');
 }
 
-// 전시 공간: 12 × 9 m 지하 방(일반 교실 9 × 7.5 m 보다 조금 큰 크기로 가정).
-// 뒤쪽 벽을 따라 전시 칸 5개, 가운데에 상자 트리 2그루, 입구 쪽에 이동식 화면 3대,
-// 안쪽(오른쪽)에 이야기 나누는 자리. 수치는 모두 여기서 바꿀 수 있다.
+// 전시 공간: 10 × 8 m 지하 방으로 가정(일반 교실 9 × 7.5 m 보다 조금 큼). 입구 쪽(앞쪽) 벽은 유리라
+// 전시에 쓰지 않는다. 뒤쪽 벽을 따라 전시 칸 5개 × 포스터 4장 = 연구회 20곳, 가운데에 상자 트리 2그루,
+// 입구 쪽에 이동식 화면 3대, 안쪽(오른쪽)에 이야기 나누는 자리.
+// 방 크기가 정해지면 아래 W(가로), D(세로)만 바꾸면 나머지가 따라서 배치된다.
 function gallerySpace() {
-  const W = 12, D = 9, H = 2.6, T = 0.15, F = 0.05; // 가로, 세로, 천장 높이, 벽 두께, 바닥 두께
-  const WHITE = '#f5f2ea', WOOD = '#a9825a', DARK = '#2b2f36';
+  const W = 10, D = 8, H = 2.6, T = 0.15, F = 0.05; // 가로, 세로, 천장 높이, 벽 두께, 바닥 두께
+  const WHITE = '#f5f2ea', WOOD = '#a9825a', DARK = '#2b2f36', GLASS = '#a9d3e8';
   state.objects = [];
   const add = (type, name, props) => addObject(type, { name, ...props });
 
   add('floor', '바닥', { w: W, d: D, color: '#cfcac2' });
   add('wall', '뒤쪽 벽', { w: W + T, z: -D / 2, h: H, color: WHITE });
   add('wall', '왼쪽 벽', { w: D + T, x: -W / 2, rot: 90, h: H, color: WHITE });
-  // 안이 들여다보이도록 앞쪽·오른쪽 벽은 반투명
+  // 오른쪽 벽은 실제로는 일반 벽이지만, 안이 들여다보이도록 반투명하게 그린다.
   add('wall', '오른쪽 벽', { w: D + T, x: W / 2, rot: 90, h: H, color: WHITE, opacity: 0.25 });
-  add('wall', '앞쪽 벽', { w: W + T, z: D / 2, h: H, color: WHITE, opacity: 0.25 });
-  add('door', '입구', { w: 1.2, x: -4.8, z: D / 2 });
-  add('floor', '입구 레드카펫', { w: 1.4, d: 3, h: 0.01, x: -4.8, z: D / 2 - 1.6, y: F, color: '#a8322d' });
+  add('wall', '앞쪽 유리벽', { w: W + T, z: D / 2, h: H, color: GLASS, opacity: 0.3 });
+  const doorX = round(-W / 2 + 1.2);
+  add('door', '입구', { w: 1.2, x: doorX, z: D / 2, color: GLASS, opacity: 0.5 });
+  add('floor', '입구 레드카펫', { w: 1.4, d: 2.6, h: 0.01, x: doorX, z: D / 2 - 1.4, y: F, color: '#a8322d' });
 
-  // 전시 칸 5개: 칸막이 4개가 뒤쪽 벽에서 2.5 m 나온다. 한 칸 폭 2.4 m.
+  // 전시 칸 5개: 칸막이 4개가 뒤쪽 벽에서 2.5 m 나온다.
   const BAYS = 5, bayW = W / BAYS, bayD = 2.5;
   const inner = -D / 2 + T / 2;            // 뒤쪽 벽 안쪽 면
-  const bayZ = inner + bayD / 2;
+  const bayZ = round(inner + bayD / 2);
   for (let i = 1; i < BAYS; i++) {
-    add('wall', `칸막이 ${i}`, { w: bayD, d: 0.1, h: 2.2, x: -W / 2 + bayW * i, z: bayZ, rot: 90, color: WHITE });
+    add('wall', `칸막이 ${i}`, { w: bayD, d: 0.1, h: 2.2, x: round(-W / 2 + bayW * i), z: bayZ, rot: 90, color: WHITE });
   }
-  // 포스터 자리(세로 A1: 0.6 × 0.84 m). 칸마다 뒤쪽 1장 + 양옆 1장씩 = 15장.
+  // 포스터 자리(세로 A1: 0.6 × 0.84 m). 칸마다 왼쪽 1 + 뒤쪽 2 + 오른쪽 1 = 4장, 모두 20장.
   const poster = { w: 0.6, h: 0.84, d: 0.02, y: 1.0, color: '#fff8e7' };
   let n = 1;
+  const spot = (props) => add('box', `연구회 ${n++} 포스터`, { ...poster, ...props });
   for (let i = 0; i < BAYS; i++) {
-    const left = -W / 2 + bayW * i, right = left + bayW;
+    const left = -W / 2 + bayW * i, right = left + bayW, mid = (left + right) / 2;
     const leftFace = left + (i === 0 ? T / 2 : 0.05), rightFace = right - (i === BAYS - 1 ? T / 2 : 0.05);
-    add('box', `포스터 자리 ${n++}`, { ...poster, x: round(leftFace + 0.011), z: bayZ, rot: 90 });
-    add('box', `포스터 자리 ${n++}`, { ...poster, x: round((left + right) / 2), z: round(inner + 0.011) });
-    add('box', `포스터 자리 ${n++}`, { ...poster, x: round(rightFace - 0.011), z: bayZ, rot: 90 });
+    const gap = Math.min(0.45, bayW / 4);
+    spot({ x: round(leftFace + 0.011), z: bayZ, rot: 90 });
+    spot({ x: round(mid - gap), z: round(inner + 0.011) });
+    spot({ x: round(mid + gap), z: round(inner + 0.011) });
+    spot({ x: round(rightFace - 0.011), z: bayZ, rot: 90 });
   }
 
   // 상자 트리: 정육면체 4개를 점점 작게 쌓는다. 옆면 4 × 4단 = 16면에 포스터를 붙일 수 있다.
@@ -633,22 +638,23 @@ function gallerySpace() {
       y += size;
     });
     add('box', `${name} 별`, { w: 0.16, h: 0.16, d: 0.16, x, z, y: round(y), rot: 45, color: '#f0b429', group: name });
-    add('box', `${name} 선물 1`, { w: 0.3, h: 0.25, d: 0.3, x: x - 0.75, z: z + 0.45, y: F, rot: 20, color: '#d64545' });
-    add('box', `${name} 선물 2`, { w: 0.25, h: 0.2, d: 0.35, x: x + 0.7, z: z + 0.55, y: F, rot: -15, color: '#f0b429' });
+    add('box', `${name} 선물 1`, { w: 0.3, h: 0.25, d: 0.3, x: round(x - 0.75), z: round(z + 0.45), y: F, rot: 20, color: '#d64545' });
+    add('box', `${name} 선물 2`, { w: 0.25, h: 0.2, d: 0.35, x: round(x + 0.7), z: round(z + 0.55), y: F, rot: -15, color: '#f0b429' });
   };
-  tree('트리 1', -2.4, 0.3);
-  tree('트리 2', 0.6, 0.3);
+  const treeZ = round(inner + bayD + (D - bayD) * 0.3);
+  tree('트리 1', round(-W * 0.24), treeZ);
+  tree('트리 2', round(W * 0.04), treeZ);
 
-  // 입구 쪽 이동식 화면 3대(받침 + 기둥 + 화면), 방 안쪽을 바라본다.
-  [-2.9, -1.7, -0.5].forEach((x, i) => {
-    const group = `이동식 화면 ${i + 1}`, z = D / 2 - 0.9;
+  // 입구 옆 유리벽 앞에 이동식 화면 3대(받침 + 기둥 + 화면), 방 안쪽을 바라본다.
+  for (let i = 0; i < 3; i++) {
+    const group = `이동식 화면 ${i + 1}`, x = round(doorX + 1.6 + i * 1.1), z = round(D / 2 - 0.8);
     add('cylinder', `${group} 받침`, { w: 0.42, d: 0.42, h: 0.03, x, z, y: F, color: '#e8e4dc', group });
-    add('cylinder', `${group} 기둥`, { w: 0.04, d: 0.04, h: 1.05, x, z: z + 0.03, y: F + 0.03, color: '#e8e4dc', group });
+    add('cylinder', `${group} 기둥`, { w: 0.04, d: 0.04, h: 1.05, x, z: round(z + 0.03), y: F + 0.03, color: '#e8e4dc', group });
     add('box', `${group} 화면`, { w: 0.62, h: 0.37, d: 0.03, x, z, y: 0.95, color: DARK, group });
-  });
+  }
 
   // 안쪽 이야기 자리: 탁자 + 의자 6개, 벽 쪽에 커피 머신 놓는 수납장
-  const tx = 3.6, tz = 2.6;
+  const tx = round(W / 2 - 2.3), tz = round(D / 2 - 1.9);
   add('box', '탁자', { w: 1.8, d: 0.9, h: 0.72, x: tx, z: tz, y: F, color: WOOD, group: '이야기 자리' });
   let chair = 1;
   for (const dz of [-0.8, 0.8]) {
@@ -658,7 +664,7 @@ function gallerySpace() {
   }
   const cx = round(W / 2 - T / 2 - 0.3);
   add('box', '커피 수납장', { w: 1.4, d: 0.55, h: 0.9, x: cx, z: tz, y: F, rot: 90, color: WHITE, group: '커피 코너' });
-  add('box', '커피 머신', { w: 0.4, d: 0.3, h: 0.42, x: cx, z: tz - 0.3, y: F + 0.9, rot: 90, color: DARK, group: '커피 코너' });
+  add('box', '커피 머신', { w: 0.4, d: 0.3, h: 0.42, x: cx, z: round(tz - 0.3), y: F + 0.9, rot: 90, color: DARK, group: '커피 코너' });
 
   state.selectedId = null;
   syncScene();

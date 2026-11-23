@@ -55,3 +55,27 @@
 - `posters.js` — 전시 벽면에 입히는 그림 26장(서문, 관 소개, 연구회)
 - `posters-hall.js` — 복도공간 전시회의 벽 글씨 그림 26장(투명 바탕, 가로 구성). 필요할 때만 불러옵니다
 - `vendor/three.bundle.js` — [three.js](https://threejs.org) r170과 OrbitControls를 한 파일로 묶은 것 (MIT 라이선스)
+- `tools/` — 전시 그림을 다시 만드는 도구
+- `tests/` — 브라우저로 주요 동작을 눌러 보는 점검 스크립트
+
+## 전시 그림 다시 만들기
+
+전시 내용(아티팩트)이 바뀌면 아래 순서로 그림 파일을 다시 만듭니다. Node.js, Playwright, Python 3, 그리고 글꼴 꾸러미(`npm i @fontsource/noto-sans-kr @fontsource/noto-serif-kr`)가 필요합니다.
+
+```bash
+# 1. 아티팩트의 project/*.dc.html 을 한 폴더(src)에 받아 둔다
+python3 tools/anonymize.py src anon                        # 교사 이름을 OOO 으로
+node tools/render-posters.js anon out-room node_modules/@fontsource   # 방 형식 전시판(세로)
+node tools/render-hall.js    anon out-hall node_modules/@fontsource   # 복도 벽 글씨(가로, 투명 바탕)
+python3 tools/build-posters.py out-room posters.js      "전시 벽면에 입히는 그림. 교사 이름은 OOO 으로 가렸다."
+python3 tools/build-posters.py out-hall posters-hall.js "복도공간 전시회의 벽 글씨 그림. 교사 이름은 OOO 으로 가렸다."
+```
+
+그림을 바꾼 뒤에는 `app.js`의 `POSTER_FILES`에 있는 `?v=` 값을 올려야 브라우저가 새 파일을 받습니다.
+
+## 점검
+
+```bash
+node tests/regressions.js   # 고쳤던 문제가 다시 생기지 않았는지 확인(실패하면 종료 코드 1)
+node tests/hall.js          # 그 밖의 스크립트는 눌러 본 결과를 출력만 한다
+```

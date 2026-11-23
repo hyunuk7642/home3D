@@ -34,7 +34,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   objects: [],
   selectedId: null,
-  mode: 'select',     // 'select' | 'wall'
+  mode: 'select',     // 'select' | 'wall' | 'walk'
   snap: 0.1,
   trackpad: IS_MAC,   // 두 손가락 쓸기로 화면을 돌리는 방식
 };
@@ -407,10 +407,23 @@ function updateWalls() {
   }
 }
 
-// 물체를 바꿀 때는 이 함수를 거친다. 벽을 옮기거나 돌리면 그 벽의 문·창문도 함께 따라간다.
+// 벽에 붙어 있는 것들: 문·창문, 그리고 벽면이나 벽 위에 놓인 전시판·벽 글씨·리스·전구 줄 따위.
+// (가운데가 벽 두께에서 12 cm 안, 벽 길이 안에 있는 물체. 벽·바닥·사람은 빼고, 묶음은 묶음끼리 움직이므로 뺀다.)
+function attachedTo(wall) {
+  const found = openingsIn(wall);
+  const seen = new Set(found.map((r) => r.o.id));
+  for (const o of state.objects) {
+    if (seen.has(o.id) || o === wall || o.group || ['wall', 'floor', 'person'].includes(o.type)) continue;
+    const { lx, lz } = wallLocal(wall, o.x, o.z);
+    if (Math.abs(lz) <= wall.d / 2 + 0.12 && Math.abs(lx) <= wall.w / 2 + 0.05) found.push({ o, lx, lz });
+  }
+  return found;
+}
+
+// 물체를 바꿀 때는 이 함수를 거친다. 벽을 옮기거나 돌리면 그 벽에 붙어 있는 것들도 함께 따라간다.
 function edit(o, change) {
   const carried = o.type === 'wall'
-    ? openingsIn(o).map(({ o: p, lx, lz }) => ({ p, lx, lz, dy: p.y - o.y, turn: p.rot - o.rot }))
+    ? attachedTo(o).map(({ o: p, lx, lz }) => ({ p, lx, lz, dy: p.y - o.y, turn: p.rot - o.rot }))
     : [];
   change();
   for (const { p, lx, lz, dy, turn } of carried) {
@@ -448,6 +461,7 @@ function removeNode(id) {
   scene.remove(node);
   node.traverse((n) => [].concat(n.material || []).forEach((m) => bulbMaterials.includes(m) || m.dispose()));
   if (node.userData.face) node.userData.face.dispose();
+  if (node.userData.base && node.userData.base.map) node.userData.base.map.dispose(); // 마루 무늬
   if (node.userData.key) node.geometry.dispose();
   meshes.delete(id);
 }
@@ -458,18 +472,33 @@ function syncScene() {
   state.objects.forEach(applyNode);
   updateWalls();
   if (!ids.has(state.selectedId)) state.selectedId = null;
-  // 복도공간 전시회의 벽 글씨 그림은 용량이 커서, 그 그림을 쓰는 물체가 있을 때에만 불러온다.
-  if (!hallPosters && state.objects.some((o) => /^hall-/.test(o.slot || ''))) {
-    hallPosters = new Promise((resolve, reject) => {
-      const el = document.createElement('script');
-      el.src = 'posters-hall.js?v=1';
-      el.onload = resolve;
-      el.onerror = reject;
-      document.head.append(el);
-    }).then(syncScene, () => notice('벽 글씨 파일(posters-hall.js)을 불러오지 못했습니다.'));
-  }
+  // 그림 파일은 용량이 커서, 그 그림을 쓰는 물체가 있을 때에만 불러온다.
+  const used = new Set(state.objects.filter((o) => o.image).map((o) => o.image));
+  for (const image of used) loadPosters(posterKind(image)).catch(() => {});
+  // 더는 쓰이지 않는 그림은 그래픽 메모리에서 내린다.
+  for (const [image, tex] of textures) if (!used.has(image)) { tex.dispose(); textures.delete(image); }
 }
-let hallPosters = null;
+
+// 그림 파일 두 가지: 방 형식 전시판(posters.js)과 복도 벽 글씨(posters-hall.js).
+const POSTER_FILES = { room: 'posters.js?v=3', hall: 'posters-hall.js?v=1' };
+const posterKind = (key) => (/^(poster:)?hall-/.test(key) ? 'hall' : 'room');
+const posterLoads = {};
+function loadPosters(kind) {
+  if (!posterLoads[kind]) {
+    posterLoads[kind] = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = POSTER_FILES[kind];
+      el.onload = resolve;
+      el.onerror = () => { el.remove(); reject(new Error(POSTER_FILES[kind])); };
+      document.head.append(el);
+    });
+    posterLoads[kind].then(syncScene, () => {
+      delete posterLoads[kind]; // 다음에 다시 시도할 수 있게
+      notice(`그림 파일(${POSTER_FILES[kind].split('?')[0]})을 불러오지 못했습니다. 잠시 뒤 다시 눌러 주세요.`);
+    });
+  }
+  return posterLoads[kind];
+}
 
 const selected = () => state.objects.find((o) => o.id === state.selectedId) || null;
 const newId = () => Math.random().toString(36).slice(2, 10);
@@ -516,6 +545,7 @@ function sanitize(list) {
       ...(r.deco === 'xmas' ? { deco: 'xmas' } : {}),
       ...(r.decal === true ? { decal: true } : {}),
       ...(r.finish === 'wood' ? { finish: 'wood' } : {}),
+      ...(r.space === 'gallery' || r.space === 'hall' ? { space: r.space } : {}),
       ...(typeof r.slot === 'string' && /^[\w-]{1,40}$/.test(r.slot) ? { slot: r.slot } : {}),
     };
   });
@@ -688,11 +718,11 @@ function moveWithGroup(o, dx, dz) {
 function removeSelected() {
   const o = selected();
   if (!o) return;
-  // 벽을 지우면 그 벽에 달린 문·창문도 함께 지운다.
+  // 벽을 지우면 그 벽에 붙어 있는 것들(문·창문, 전시판, 벽 글씨 등)도 함께 지운다.
   const gone = new Set();
   for (const p of groupOf(o)) {
     gone.add(p.id);
-    if (p.type === 'wall') openingsIn(p).forEach((r) => gone.add(r.o.id));
+    if (p.type === 'wall') attachedTo(p).forEach((r) => gone.add(r.o.id));
   }
   state.objects = state.objects.filter((p) => !gone.has(p.id));
   syncScene();
@@ -707,7 +737,7 @@ function duplicateSelected() {
   const originals = new Set();
   for (const p of groupOf(o)) {
     originals.add(p);
-    if (p.type === 'wall') openingsIn(p).forEach((r) => originals.add(r.o));
+    if (p.type === 'wall') attachedTo(p).forEach((r) => originals.add(r.o));
   }
   let copyOfSelected = null;
   for (const p of originals) {
@@ -861,6 +891,16 @@ const deco = {
   },
 };
 
+// 지금 장면이 어떤 전시 배치인가: 'gallery'(방), 'hall'(복도), 아니면 null.
+// 바닥 물체에 저장해 둔 표시(space)로 알아내므로 이름을 바꿔도 된다. 표시가 없던 예전 저장본은 이름으로 알아낸다.
+function spaceKind() {
+  const marked = state.objects.find((o) => o.space);
+  if (marked) return marked.space;
+  if (state.objects.some((o) => o.name === '복도 바닥')) return 'hall';
+  if (state.objects.some((o) => o.name === '가운데 가벽')) return 'gallery';
+  return null;
+}
+
 // "크리스마스 꾸미기": 지금 공간(전시 공간 또는 복도공간 전시회)에 카펫과 소품을 더한다.
 // 다시 누르면 꾸민 것만 뺀다(deco: 'xmas' 표시). 트리·탁자·수납장은 놓인 자리를 찾아 꾸민다.
 function toggleXmas() {
@@ -870,10 +910,12 @@ function toggleXmas() {
     commit();
     return notice('크리스마스 장식을 뺐습니다. 다시 누르면 꾸며집니다.');
   }
-  const inHall = state.objects.some((o) => o.name === '복도 바닥');
-  if (!inHall && !state.objects.some((o) => o.name === '가운데 가벽')) gallerySpace();
+  // 빈 화면이면 전시 공간부터 만든다. 다른 장면이면 바꾸지 않고 알리기만 한다.
+  if (!state.objects.length) gallerySpace();
+  const kind = spaceKind();
+  if (!kind) return notice('크리스마스 꾸미기는 "전시 공간"이나 "복도공간 전시회"에서만 됩니다. 지금 공간은 그대로 두었습니다.');
   const before = state.objects.length;
-  (inHall ? decorateHall : decorateGallery)();
+  (kind === 'hall' ? decorateHall : decorateGallery)();
   state.selectedId = null;
   syncScene();
   commit();
@@ -965,19 +1007,27 @@ const EMPTY_PANEL = '#fff8e7', FILLED_PANEL = '#f6f5f1'; // 빈 전시판 색, �
 // 전시판 자리가 하나도 없으면 전시 공간부터 만든다. 옮기거나 크기를 바꾼 전시판은 그대로 둔다.
 function toggleExhibits() {
   let built = false;
-  if (!state.objects.some((o) => o.slot)) { gallerySpace(); built = true; }
-  const slots = state.objects.filter((o) => o.slot && (window.POSTERS || {})[o.slot]);
-  if (!slots.length) return notice('전시 자료 파일(posters.js)을 찾지 못했습니다.');
-  const remove = !built && slots.every((o) => o.image);
-  for (const o of slots) {
-    if (remove) delete o.image; else o.image = `poster:${o.slot}`;
-    o.color = remove ? EMPTY_PANEL : FILLED_PANEL;
-    applyNode(o);
+  if (!state.objects.some((o) => o.slot)) {
+    // 빈 화면이면 전시 공간부터 만든다. 다른 장면이면 바꾸지 않고 알리기만 한다.
+    if (state.objects.length) return notice('전시판 자리가 없습니다. 먼저 "전시 공간"이나 "복도공간 전시회"를 눌러 주세요. 지금 공간은 그대로 두었습니다.');
+    gallerySpace();
+    built = true;
   }
-  commit();
-  notice(remove
-    ? `전시 자료 ${slots.length}장을 뺐습니다. 다시 누르면 배치됩니다.`
-    : `전시 자료 ${slots.length}장을 벽면에 배치했습니다. 다시 누르면 빠집니다.`);
+  const kinds = [...new Set(state.objects.filter((o) => o.slot).map((o) => posterKind(o.slot)))];
+  Promise.all(kinds.map(loadPosters)).then(() => {
+    const slots = state.objects.filter((o) => o.slot && (window.POSTERS || {})[o.slot]);
+    if (!slots.length) return;
+    const remove = !built && slots.every((o) => o.image);
+    for (const o of slots) {
+      if (remove) delete o.image; else o.image = `poster:${o.slot}`;
+      if (!o.decal) o.color = remove ? EMPTY_PANEL : FILLED_PANEL; // 벽 글씨는 가벽 색을 그대로 둔다
+    }
+    syncScene();
+    commit();
+    notice(remove
+      ? `전시 자료 ${slots.length}장을 뺐습니다. 다시 누르면 배치됩니다.`
+      : `전시 자료 ${slots.length}장을 벽면에 배치했습니다. 다시 누르면 빠집니다.`);
+  }, () => {}); // 실패 알림은 loadPosters 가 띄운다
 }
 
 // 전시 공간: 10 × 8 m 지하 방으로 가정(일반 교실 9 × 7.5 m 보다 조금 큼). 입구 쪽(앞쪽) 벽은 유리라
@@ -992,7 +1042,7 @@ function gallerySpace() {
   state.objects = [];
   const add = (type, name, props) => addObject(type, { name, ...props });
 
-  add('floor', '바닥', { w: W, d: D, color: '#cfcac2' });
+  add('floor', '바닥', { w: W, d: D, color: '#cfcac2', space: 'gallery' });
   add('wall', '뒤쪽 벽', { w: W + T, z: -D / 2, h: H, color: WHITE });
   add('wall', '왼쪽 벽', { w: D + T, x: -W / 2, rot: 90, h: H, color: WHITE });
   // 오른쪽 벽은 실제로는 일반 벽이지만, 안이 들여다보이도록 반투명하게 그린다.
@@ -1069,7 +1119,7 @@ function hallSpace() {
   state.objects = [];
   const add = (type, name, props) => addObject(type, { name, ...props });
 
-  add('floor', '복도 바닥', { w: L, d: W, h: F, color: '#ffffff', finish: 'wood' });
+  add('floor', '복도 바닥', { w: L, d: W, h: F, color: '#ffffff', finish: 'wood', space: 'hall' });
   for (const side of [-1, 1]) { // 유리 난간과 손잡이
     const label = side < 0 ? '뒤쪽' : '앞쪽', z = round(side * (W / 2 - 0.03));
     add('wall', `${label} 난간`, { w: L, d: 0.04, h: 1.1, z, color: GLASS, opacity: 0.3 });
@@ -1093,8 +1143,10 @@ function hallSpace() {
     add('wall', `제${i + 1}관 가벽`, { w: len, d: WALL_T, h: 2.2, x: cx, z: z0, color });
     const items = [[zone.title, `hall-zone${i + 1}`], ...zone.rooms.map((name) => [name, `hall-room${String(room++).padStart(2, '0')}`])];
     const inner = items.slice(0, n), outer = items.slice(n); // 가운데 길 쪽 면, 난간 쪽 면
+    // 어느 면에서든 보는 사람 기준 왼쪽 → 오른쪽으로 읽히게 놓는다.
+    // +z 쪽 면은 x 가 커지는 쪽이 오른쪽이고, -z 쪽 면은 마주 보고 서므로 반대다.
     const hang = (list, sideZ) => list.forEach(([name, slot], k) => {
-      letter(name, slot, { x: round(cx + (k - (list.length - 1) / 2) * SECTION), z: round(z0 + sideZ * lift), color });
+      letter(name, slot, { x: round(cx + sideZ * (k - (list.length - 1) / 2) * SECTION), z: round(z0 + sideZ * lift), color });
     });
     hang(inner, -row);
     hang(outer, row);
@@ -1372,13 +1424,15 @@ function setRay(e) {
 // 맞은 물체의 id 와 맞은 점. 문·창문은 여러 조각이라 부모를 따라 올라가 id 를 찾는다.
 function pickObject(e) {
   setRay(e);
+  const emptyDecals = new Set(state.objects.filter((o) => o.decal && !o.image).map((o) => o.id));
   const hits = raycaster.intersectObjects([...meshes.values()], true)
     .filter((h) => h.object.visible || h.object.userData.grip)
     .map((h) => {
       let node = h.object;
       while (node && !node.userData.id) node = node.parent;
       return { id: node.userData.id, point: h.point };
-    });
+    })
+    .filter((h) => !emptyDecals.has(h.id)); // 자료를 뺀 벽 글씨는 보이지 않으니 집히지 않게
   const first = hits[0];
   if (!first) return null;
   // 위에서 보면 문·창문이 벽 윗부분에 가려진다. 벽을 눌렀더라도 그 자리에
@@ -1555,13 +1609,11 @@ document.querySelectorAll('[data-add]').forEach((btn) => {
   btn.addEventListener('click', () => {
     // 지금 보고 있는 곳 한가운데에 놓는다
     const type = btn.dataset.add;
+    setMode('select'); // 벽 그리기나 걷기 중이었다면 먼저 제대로 끝낸다
     const o = isOpening({ type })
       ? addOpening(type)
       : addObject(type, { x: snap(controls.target.x), z: snap(controls.target.z) });
     applyToMesh(o);
-    state.mode = 'select';
-    wallStart = null;
-    preview.visible = startMarker.visible = false;
     state.selectedId = o.id;
     commit();
   });

@@ -74,8 +74,8 @@
 
 <main>
   <div id="view">
-    <canvas id="canvas"></canvas>
-    <div id="hint"></div>
+    <canvas id="canvas" aria-label="공간을 입체로 보여 주는 화면. 물체의 이름과 크기는 오른쪽 물체 목록에서 읽을 수 있습니다."></canvas>
+    <div id="hint" role="status" aria-live="polite"></div>
     <div id="walk-pad" hidden>
       <button type="button" data-walk="turnLeft" aria-label="왼쪽으로 돌기">⟲</button>
       <button type="button" data-walk="forward" aria-label="앞으로">▲</button>
@@ -142,7 +142,6 @@
 </main>
 
 <script src="vendor/three.bundle.js?v=170"></script>
-<script src="posters.js?v=2"></script>
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>

@@ -51,7 +51,8 @@
 
 ## 구성
 
-- `index.html`, `style.css`, `app.js` — 프로그램 본체
+- `index.html`, `style.css` — 화면
+- `js/` — 프로그램 본체. `scene.js`(장면과 물체), `panel.js`(패널과 편집), `presets.js`(배치와 꾸미기), `view.js`(카메라·걷기), `input.js`(입력과 시작) 순서로 실행됩니다
 - `posters.js` — 전시 벽면에 입히는 그림 26장(서문, 관 소개, 연구회)
 - `posters-hall.js` — 복도공간 전시회의 벽 글씨 그림 26장(투명 바탕, 가로 구성). 필요할 때만 불러옵니다
 - `vendor/three.bundle.js` — [three.js](https://threejs.org) r170과 OrbitControls를 한 파일로 묶은 것 (MIT 라이선스)
@@ -71,7 +72,7 @@ python3 tools/build-posters.py out-room posters.js      "전시 벽면에 입히
 python3 tools/build-posters.py out-hall posters-hall.js "복도공간 전시회의 벽 글씨 그림. 교사 이름은 OOO 으로 가렸다."
 ```
 
-그림을 바꾼 뒤에는 `app.js`의 `POSTER_FILES`에 있는 `?v=` 값을 올려야 브라우저가 새 파일을 받습니다.
+그림을 바꾼 뒤에는 `js/scene.js`의 `POSTER_FILES`에 있는 `?v=` 값을 올려야 브라우저가 새 파일을 받습니다.
 
 ## 점검
 

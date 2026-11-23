@@ -111,6 +111,24 @@ const { chromium } = require('playwright');
     await page.close();
   }
 
+  { // 복도는 다리라서 바닥 끝을 걸어서 넘어갈 수 없다. 방에서는 문으로 나갈 수 있다.
+    const { page } = await open();
+    await page.click('#hall'); await page.waitForTimeout(800);
+    const stand = (x, z) => page.evaluate(([x, z]) => { const { state, canStand } = window.__home3d; return canStand(x, z, state.objects.find((o) => o.type === 'person')); }, [x, z]);
+    check('복도 안쪽 길에는 설 수 있음', await stand(-17, 0.9) && await stand(17.5, 2.5));
+    check('복도 양 끝과 난간 밖에는 설 수 없음', !(await stand(18.2, 2.5)) && !(await stand(-18.2, 0)) && !(await stand(0, 4.3)));
+    await page.click('#gallery'); await page.click('#walk'); await page.waitForTimeout(200);
+    check('방에서는 문 밖에 설 수 있음', await stand(-3.8, 5));
+    await page.keyboard.press('Escape');
+
+    // 좁은 화면에서 도구 모음이 한 줄이고 3D 화면이 넉넉하다
+    await page.setViewportSize({ width: 390, height: 780 }); await page.waitForTimeout(300);
+    const [bar, view, scroll] = await page.evaluate(() => { const t = document.getElementById('toolbar'); return [t.offsetHeight, document.getElementById('view').offsetHeight, t.scrollWidth > t.clientWidth]; });
+    check('휴대폰 폭에서 도구 모음 한 줄(옆으로 밀기), 3D 화면이 더 큼', bar <= 70 && view >= 350 && scroll, JSON.stringify({ bar, view, scroll }));
+    await page.screenshot({ path: require('path').join(require('os').tmpdir(), 'home3d-mobile.png') });
+    await page.close();
+  }
+
   await browser.close();
   console.log(failures.length ? `\n실패 ${failures.length}건: ${failures.join(' / ')}` : '\n모두 통과');
   process.exit(failures.length ? 1 : 0);

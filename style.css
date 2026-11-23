@@ -150,3 +150,11 @@ p.muted { margin: 0; }
   -webkit-user-select: none;
 }
 @media (max-width: 760px) { #hint { max-width: calc(100% - 170px); } }
+
+/* 좁은 화면: 도구 모음을 여러 줄로 쌓지 않고 한 줄로 두어 옆으로 밀어 쓴다. 3D 화면이 넓어진다. */
+@media (max-width: 760px) {
+  #toolbar { flex-wrap: nowrap; overflow-x: auto; gap: 12px; padding: 6px 10px; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+  #toolbar .brand { width: auto; flex: none; font-size: 14px; }
+  #toolbar .group { flex: none; }
+  #toolbar button, #toolbar select { min-height: 40px; }
+}
